@@ -38,7 +38,7 @@ cd deploy/terraform
 
 # Copy and fill in variables
 cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars with your account_id, ha_hostname, tunnel_secret
+# Edit terraform.tfvars with your account_id and Home Assistant hostname/port
 
 # Set R2 backend credentials (never in tfvars — these are for the state bucket)
 export AWS_ACCESS_KEY_ID="<R2 token access key>"

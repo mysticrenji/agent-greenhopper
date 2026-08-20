@@ -32,3 +32,4 @@ deploy/terraform/*.auto.tfvars
 .vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json
+dev.tfvars

@@ -8,6 +8,3 @@ account_id = "your-cloudflare-account-id"
 # In-cluster hostname of Home Assistant, as cloudflared would resolve it.
 ha_hostname = "home-assistant.home-assistant.svc.cluster.local"
 ha_port     = 8123
-
-# Generate with: openssl rand -base64 32
-tunnel_secret = "REPLACE_WITH_BASE64_SECRET"
