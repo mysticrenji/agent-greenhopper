@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "greenhopper-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // VPC Service binding to reach Home Assistant privately through the tunnel.
+  // Replace the service_id with your real VPC Service ID after creating it.
+  "vpc_services": [
+    { "binding": "HASS", "service_id": "REPLACE_WITH_VPC_SERVICE_ID", "remote": true }
+  ],
+  "d1_databases": [
+    { "binding": "DB", "database_name": "greenhopper", "database_id": "REPLACE_WITH_D1_ID" }
+  ]
+}

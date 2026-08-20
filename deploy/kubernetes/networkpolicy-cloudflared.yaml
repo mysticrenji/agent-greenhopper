@@ -1,0 +1,59 @@
+# NetworkPolicy for cloudflared
+#
+# Workers VPC needs QUIC, which means outbound UDP 7844 to Cloudflare's edge. If
+# your cluster has a default-deny egress policy, the tunnel fails to establish and
+# the symptom is an unhelpful connection error in the Worker rather than anything
+# obviously DNS- or firewall-shaped. This policy makes the requirement explicit.
+#
+# Apply only if your CNI enforces NetworkPolicy (Calico, Cilium, etc.). It is
+# harmless but inert otherwise.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cloudflared-egress
+  namespace: greenhopper
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cloudflared
+  policyTypes:
+    - Egress
+  egress:
+    # Cluster DNS, so the tunnel can resolve the Home Assistant Service name.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # Home Assistant, reached by its in-cluster Service address. Adjust the
+    # namespace label and port to match your installation.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: home-assistant
+      ports:
+        - protocol: TCP
+          port: 8123
+
+    # Cloudflare edge: QUIC on 7844 plus TCP 443 for the fallback path and for
+    # certificate/config fetches.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: UDP
+          port: 7844
+        - protocol: TCP
+          port: 7844
+        - protocol: TCP
+          port: 443

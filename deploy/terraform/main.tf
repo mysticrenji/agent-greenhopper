@@ -1,0 +1,162 @@
+# Terraform infrastructure for agent-greenhopper
+#
+# Deploys all Cloudflare-side infrastructure:
+#   - Cloudflare Tunnel (remotely-managed)
+#   - VPC Service pointing at Home Assistant
+#   - D1 database
+#   - R2 bucket for Terraform state
+#
+# State is stored in a Cloudflare R2 bucket (S3-compatible backend), so the
+# entire system is self-contained within Cloudflare — no AWS account needed.
+#
+# Usage:
+#   cd deploy/terraform
+#   terraform init
+#   terraform plan
+#   terraform apply
+#
+# Prerequisites:
+#   - Cloudflare API token with: Account > Workers R2 Storage > Edit,
+#     Account > Cloudflare Tunnel > Edit, Account > D1 > Edit,
+#     Account > Workers Scripts > Edit
+#   - An R2 bucket already created for state (chicken-and-egg: create manually once)
+#   - cloudflared running in Kubernetes (deploy/kubernetes/cloudflared.yaml)
+
+terraform {
+  required_version = ">= 1.5"
+
+  # State stored in Cloudflare R2 — S3-compatible, no AWS needed.
+  # Create the bucket once manually:
+  #   wrangler r2 bucket create greenhopper-tfstate
+  # Then create an R2 API token scoped to that bucket with Object Read & Write.
+  backend "s3" {
+    bucket = "greenhopper-tfstate"
+    key    = "cloudflare/terraform.tfstate"
+    region = "auto"
+
+    # Required for R2 compatibility — disables S3-specific validation
+    skip_credentials_validation = true
+    skip_metadata_api_check     = true
+    skip_region_validation      = true
+    skip_requesting_account_id  = true
+    skip_s3_checksum            = true
+    use_path_style              = true
+
+    # Set these via environment variables:
+    #   AWS_ACCESS_KEY_ID     = <R2 API token access key>
+    #   AWS_SECRET_ACCESS_KEY = <R2 API token secret key>
+    # endpoints.s3 via:
+    #   AWS_ENDPOINT_URL_S3   = https://<account_id>.r2.cloudflarestorage.com
+  }
+
+  required_providers {
+    cloudflare = {
+      source  = "cloudflare/cloudflare"
+      version = "~> 5.19"
+    }
+  }
+}
+
+# Authentication via CLOUDFLARE_API_TOKEN env var
+provider "cloudflare" {}
+
+# ---------------------------------------------------------------------------
+# Variables
+# ---------------------------------------------------------------------------
+
+variable "account_id" {
+  type        = string
+  description = "Cloudflare account ID"
+}
+
+variable "ha_hostname" {
+  type        = string
+  description = "In-cluster hostname of Home Assistant (e.g. home-assistant.home-assistant.svc.cluster.local)"
+  default     = "home-assistant.home-assistant.svc.cluster.local"
+}
+
+variable "ha_port" {
+  type        = number
+  description = "HTTP port of Home Assistant"
+  default     = 8123
+}
+
+variable "tunnel_secret" {
+  type        = string
+  sensitive   = true
+  description = "Secret for the Cloudflare Tunnel (base64-encoded, 32+ bytes). Generate with: openssl rand -base64 32"
+}
+
+# ---------------------------------------------------------------------------
+# Cloudflare Tunnel (remotely-managed)
+# ---------------------------------------------------------------------------
+
+resource "cloudflare_zero_trust_tunnel_cloudflared" "greenhopper" {
+  account_id = var.account_id
+  name       = "greenhopper"
+  secret     = var.tunnel_secret
+}
+
+# ---------------------------------------------------------------------------
+# VPC Service — the private path from Workers to Home Assistant
+# ---------------------------------------------------------------------------
+
+resource "cloudflare_connectivity_directory_service" "home_assistant" {
+  account_id = var.account_id
+  name       = "home-assistant"
+  type       = "http"
+  http_port  = var.ha_port
+
+  host = {
+    hostname = var.ha_hostname
+    resolver_network = {
+      tunnel_id = cloudflare_zero_trust_tunnel_cloudflared.greenhopper.id
+      # resolver_ips omitted: cloudflared uses cluster DNS automatically
+    }
+  }
+}
+
+# ---------------------------------------------------------------------------
+# D1 Database
+# ---------------------------------------------------------------------------
+
+resource "cloudflare_d1_database" "greenhopper" {
+  account_id = var.account_id
+  name       = "greenhopper"
+}
+
+# ---------------------------------------------------------------------------
+# R2 Bucket for Terraform state (declared here for documentation, but must
+# exist BEFORE `terraform init` — bootstrap manually with wrangler)
+# ---------------------------------------------------------------------------
+
+resource "cloudflare_r2_bucket" "tfstate" {
+  account_id = var.account_id
+  name       = "greenhopper-tfstate"
+  location   = "EEUR"
+}
+
+# ---------------------------------------------------------------------------
+# Outputs — feed these into wrangler.jsonc or CI
+# ---------------------------------------------------------------------------
+
+output "tunnel_id" {
+  value       = cloudflare_zero_trust_tunnel_cloudflared.greenhopper.id
+  description = "Tunnel ID — use in the Kubernetes cloudflared deployment"
+}
+
+output "tunnel_token" {
+  value       = cloudflare_zero_trust_tunnel_cloudflared.greenhopper.tunnel_token
+  sensitive   = true
+  description = "Tunnel token — store as Kubernetes secret 'cloudflared-tunnel'"
+}
+
+output "vpc_service_id" {
+  value       = cloudflare_connectivity_directory_service.home_assistant.service_id
+  description = "VPC Service ID — put in wrangler.jsonc vpc_services[].service_id"
+}
+
+output "d1_database_id" {
+  value       = cloudflare_d1_database.greenhopper.id
+  description = "D1 Database ID — put in wrangler.jsonc d1_databases[].database_id"
+}

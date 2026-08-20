@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "greenhopper-agent",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // Hourly cron trigger
+  "triggers": {
+    "crons": ["0 * * * *"]
+  },
+  // VPC Service binding to reach Home Assistant
+  "vpc_services": [
+    { "binding": "HASS", "service_id": "REPLACE_WITH_VPC_SERVICE_ID", "remote": true }
+  ],
+  "d1_databases": [
+    { "binding": "DB", "database_name": "greenhopper", "database_id": "REPLACE_WITH_D1_ID" }
+  ],
+  // AI Gateway binding for model calls
+  "ai": {
+    "binding": "AI"
+  }
+}

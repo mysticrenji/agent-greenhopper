@@ -1,0 +1,25 @@
+{
+  "name": "@greenhopper/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Remote MCP server exposing read-only plant monitoring tools.",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --build"
+  },
+  "dependencies": {
+    "@greenhopper/domain": "workspace:*",
+    "@greenhopper/hass": "workspace:*",
+    "@greenhopper/storage": "workspace:*",
+    "agents": "0.0.97",
+    "@modelcontextprotocol/server": "2.0.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "4.20250617.0",
+    "wrangler": "4.19.1"
+  }
+}

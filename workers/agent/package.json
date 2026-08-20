@@ -1,0 +1,23 @@
+{
+  "name": "@greenhopper/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Scheduled plant-monitoring agent. Runs hourly, assesses plant health, sends notifications.",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --build"
+  },
+  "dependencies": {
+    "@greenhopper/domain": "workspace:*",
+    "@greenhopper/hass": "workspace:*",
+    "@greenhopper/storage": "workspace:*",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "4.20250617.0",
+    "wrangler": "4.19.1"
+  }
+}

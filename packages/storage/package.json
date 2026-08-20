@@ -1,0 +1,31 @@
+{
+  "name": "@greenhopper/storage",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "D1 schema, migrations and repositories for reading rollups, alert state and the notification audit log.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./src/index.ts"
+    },
+    "./testing": {
+      "types": "./dist/testing/sqlite.d.ts",
+      "default": "./src/testing/sqlite.ts"
+    }
+  },
+  "main": "./src/index.ts",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "migrations"
+  ],
+  "scripts": {
+    "typecheck": "tsc --build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@greenhopper/domain": "workspace:*"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/domain" },
+    { "path": "./packages/hass" },
+    { "path": "./packages/storage" },
+    { "path": "./workers/mcp" },
+    { "path": "./workers/agent" }
+  ]
+}

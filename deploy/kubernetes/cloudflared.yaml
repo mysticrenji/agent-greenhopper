@@ -1,0 +1,115 @@
+# cloudflared for Workers VPC
+#
+# Provides the private network path from Cloudflare Workers to Home Assistant.
+# The Worker binds to a VPC Service that references this tunnel by ID; Home
+# Assistant needs no Ingress, no NodePort and no public hostname.
+#
+# Prerequisites, all of which matter:
+#   - Image tag >= 2025.7.0. Older cloudflared is not supported by Workers VPC.
+#   - QUIC transport (the default `auto` resolves to QUIC). Egress UDP 7844 must
+#     be permitted by any NetworkPolicy or upstream firewall.
+#   - A remotely-managed tunnel token, stored as a Secret (see below).
+#
+# Deliberately NOT included: a HorizontalPodAutoscaler. Cloudflare's guidance is
+# that scaling down breaks connections held by the removed replica, and that
+# replicas do not load-balance — they exist for availability only. Keep the
+# replica count fixed.
+#
+# Create the token Secret out of band, never in Git:
+#   kubectl -n greenhopper create secret generic cloudflared-tunnel \
+#     --from-literal=token='<tunnel-token-from-dashboard>'
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: greenhopper
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflared
+  namespace: greenhopper
+  labels:
+    app.kubernetes.io/name: cloudflared
+    app.kubernetes.io/part-of: agent-greenhopper
+spec:
+  # Two replicas for availability across node restarts. Do not autoscale.
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cloudflared
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cloudflared
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      # Spread replicas so a single node failure cannot take the tunnel down.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: cloudflared
+      containers:
+        - name: cloudflared
+          # Pin the tag. Tracking :latest would silently change a component that
+          # Workers VPC has a hard minimum version requirement on.
+          image: cloudflare/cloudflared:2025.7.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - tunnel
+            - --no-autoupdate
+            # QUIC is required by Workers VPC; state it explicitly rather than
+            # relying on `auto` resolving the way we expect.
+            - --protocol
+            - quic
+            - --metrics
+            - 0.0.0.0:2000
+            - run
+            - --token
+            - $(TUNNEL_TOKEN)
+          env:
+            - name: TUNNEL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: cloudflared-tunnel
+                  key: token
+          ports:
+            - name: metrics
+              containerPort: 2000
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

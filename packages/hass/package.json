@@ -1,0 +1,27 @@
+{
+  "name": "@greenhopper/hass",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only Home Assistant adapter: state, history, Mi Flora entity mapping, and notification delivery.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "main": "./src/index.ts",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "typecheck": "tsc --build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@greenhopper/domain": "workspace:*",
+    "zod": "4.4.3"
+  }
+}

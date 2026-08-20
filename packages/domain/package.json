@@ -1,0 +1,26 @@
+{
+  "name": "@greenhopper/domain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure plant-monitoring domain logic: signals, derived metrics, assessment rules, watering guardrails.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "main": "./src/index.ts",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "typecheck": "tsc --build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "name": "agent-greenhopper",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Plant-monitoring agent on Cloudflare Workers, reading Xiaomi Mi Flora sensors via Home Assistant over Workers VPC.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@11.22.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "typecheck": "tsc --build --verbose",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "verify": "pnpm run lint && pnpm run typecheck && pnpm run test",
+    "clean": "rm -rf packages/*/dist workers/*/dist packages/*/*.tsbuildinfo workers/*/*.tsbuildinfo *.tsbuildinfo"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.8",
+    "@types/node": "24.10.1",
+    "@vitest/coverage-v8": "4.1.10",
+    "typescript": "6.0.3",
+    "vitest": "4.1.10"
+  }
+}
