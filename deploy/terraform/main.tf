@@ -81,12 +81,6 @@ variable "ha_port" {
   default     = 8123
 }
 
-variable "tunnel_secret" {
-  type        = string
-  sensitive   = true
-  description = "Secret for the Cloudflare Tunnel (base64-encoded, 32+ bytes). Generate with: openssl rand -base64 32"
-}
-
 # ---------------------------------------------------------------------------
 # Cloudflare Tunnel (remotely-managed)
 # ---------------------------------------------------------------------------
@@ -94,7 +88,14 @@ variable "tunnel_secret" {
 resource "cloudflare_zero_trust_tunnel_cloudflared" "greenhopper" {
   account_id = var.account_id
   name       = "greenhopper"
-  secret     = var.tunnel_secret
+  config_src = "cloudflare"
+}
+
+# Kubernetes runs cloudflared with a remotely-managed tunnel token rather than
+# a credentials file, so retrieve the token Cloudflare generates for this tunnel.
+data "cloudflare_zero_trust_tunnel_cloudflared_token" "greenhopper" {
+  account_id = var.account_id
+  tunnel_id  = cloudflare_zero_trust_tunnel_cloudflared.greenhopper.id
 }
 
 # ---------------------------------------------------------------------------
@@ -123,6 +124,9 @@ resource "cloudflare_connectivity_directory_service" "home_assistant" {
 resource "cloudflare_d1_database" "greenhopper" {
   account_id = var.account_id
   name       = "greenhopper"
+  read_replication = {
+    mode = "disabled"
+  }
 }
 
 # ---------------------------------------------------------------------------
@@ -130,11 +134,11 @@ resource "cloudflare_d1_database" "greenhopper" {
 # exist BEFORE `terraform init` — bootstrap manually with wrangler)
 # ---------------------------------------------------------------------------
 
-resource "cloudflare_r2_bucket" "tfstate" {
-  account_id = var.account_id
-  name       = "greenhopper-tfstate"
-  location   = "EEUR"
-}
+# resource "cloudflare_r2_bucket" "tfstate" {
+#   account_id = var.account_id
+#   name       = "greenhopper-tfstate"
+#   location   = "EEUR"
+# }
 
 # ---------------------------------------------------------------------------
 # Outputs — feed these into wrangler.jsonc or CI
@@ -146,9 +150,9 @@ output "tunnel_id" {
 }
 
 output "tunnel_token" {
-  value       = cloudflare_zero_trust_tunnel_cloudflared.greenhopper.tunnel_token
-  sensitive   = true
+  value       = data.cloudflare_zero_trust_tunnel_cloudflared_token.greenhopper.token
   description = "Tunnel token — store as Kubernetes secret 'cloudflared-tunnel'"
+  sensitive   = true
 }
 
 output "vpc_service_id" {
