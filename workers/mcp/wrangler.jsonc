@@ -7,9 +7,13 @@
   // VPC Service binding to reach Home Assistant privately through the tunnel.
   // Replace the service_id with your real VPC Service ID after creating it.
   "vpc_services": [
-    { "binding": "HASS", "service_id": "REPLACE_WITH_VPC_SERVICE_ID", "remote": true }
+    { "binding": "HASS", "service_id": "01a01f7c-1dd6-7c03-b705-c489bd12c013", "remote": true }
   ],
   "d1_databases": [
-    { "binding": "DB", "database_name": "greenhopper", "database_id": "REPLACE_WITH_D1_ID" }
+    {
+      "binding": "DB",
+      "database_name": "greenhopper",
+      "database_id": "b36bc5b4-77ed-45c3-9c82-b4244c46fc38"
+    }
   ]
 }
