@@ -5,7 +5,7 @@ same change as any structural decision, new package, new dependency, or altered
 convention.** It is the fastest path to understanding this repository; if it goes
 stale it becomes a liability.
 
-Last updated: 2026-08-17 · Status: foundation + domain layer complete (alert-only)
+Last updated: 2026-08-21 · Status: foundation + domain layer complete (alert-only)
 
 ---
 
@@ -156,6 +156,11 @@ pnpm test             # Vitest, all packages
 pnpm test:watch
 pnpm test:coverage    # enforces thresholds on domain and graph
 ```
+
+`pnpm install` configures Git to use the tracked `.githooks/` directory. Its
+`pre-commit` hook runs `pnpm run lint` before every commit. Run
+`pnpm run prepare` to configure the hook manually when package lifecycle
+scripts were skipped.
 
 ## 6. Toolchain and versions
 
