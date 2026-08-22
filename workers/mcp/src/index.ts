@@ -52,6 +52,21 @@ const PLANT_REGISTRY: PlantRegistry = [
     },
     watering: DEFAULT_WATERING_POLICY,
   },
+  {
+    id: 'curry-leaves',
+    name: 'Curry Leaves',
+    species: 'Murraya koenigii',
+    room: 'green-room',
+    targets: {
+      // Tune light and EC against this plant's observed baseline after collecting history.
+      moisture: { min: 20, max: 50 },
+      soilTemp: { min: 18, max: 32 },
+      dli: { min: 4, max: 16 },
+      vpd: { min: 0.6, max: 1.6 },
+      conductivity: { min: 200, max: 1500 },
+    },
+    watering: DEFAULT_WATERING_POLICY,
+  },
 ];
 
 const ENTITY_REGISTRY: PlantEntities[] = [
@@ -60,6 +75,15 @@ const ENTITY_REGISTRY: PlantEntities[] = [
     deviceSlug: 'monstera_flower_care',
     airSensorSlug: 'living_room_climate',
   }),
+  {
+    plantId: 'curry-leaves',
+    moisture: 'sensor.ble_moisture_5c857e13542f',
+    soilTemp: 'sensor.ble_temperature_5c857e13542f',
+    lux: 'sensor.ble_illuminance_5c857e13542f',
+    conductivity: 'sensor.ble_conductivity_5c857e13542f',
+    airTemp: 'sensor.curry_leaves_temperature_2',
+    humidity: 'sensor.curry_leaves_humidity_2',
+  },
 ];
 
 // ---------------------------------------------------------------------------

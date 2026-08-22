@@ -43,7 +43,7 @@ export function buildObservation(sources: ObservationSources): PlantObservation 
     soilTemp: series(entities.soilTemp),
     lux: series(entities.lux),
     conductivity,
-    battery: series(entities.battery),
+    ...(entities.battery ? { battery: series(entities.battery) } : {}),
     airTemp: series(entities.airTemp),
     humidity: series(entities.humidity),
     pairedConductivity: pairConductivityWithMoisture(conductivity, moisture),

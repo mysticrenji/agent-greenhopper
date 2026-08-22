@@ -107,6 +107,12 @@ describe('assess — sensor health', () => {
     expect(codes(result.findings)).toContain('BATTERY_LOW');
   });
 
+  it('does not report a sensor fault when battery telemetry is not configured', () => {
+    const result = assess(observation({ battery: undefined }));
+    expect(codes(result.findings)).not.toContain('SENSOR_STALE');
+    expect(codes(result.findings)).not.toContain('BATTERY_LOW');
+  });
+
   it('notes missing air data as info, since Mi Flora cannot measure humidity', () => {
     const result = assess(observation({ airTemp: [], humidity: [] }));
     expect(codes(result.findings)).toContain('AIR_SENSOR_MISSING');

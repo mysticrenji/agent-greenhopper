@@ -5,15 +5,22 @@
   "compatibility_date": "2025-07-01",
   "compatibility_flags": ["nodejs_compat"],
   // Hourly cron trigger
-  "triggers": {
-    "crons": ["0 * * * *"]
+  "triggers": {    "crons": ["0 * * * *"]
   },
   // VPC Service binding to reach Home Assistant
   "vpc_services": [
-    { "binding": "HASS", "service_id": "REPLACE_WITH_VPC_SERVICE_ID", "remote": true }
+    {
+      "binding": "HASS",
+      "service_id": "01a01f7c-1dd6-7c03-b705-c489bd12c013",
+      "remote": true
+    }
   ],
   "d1_databases": [
-    { "binding": "DB", "database_name": "greenhopper", "database_id": "REPLACE_WITH_D1_ID" }
+    {
+      "binding": "DB",
+      "database_name": "greenhopper",
+      "database_id": "b36bc5b4-77ed-45c3-9c82-b4244c46fc38"
+    }
   ],
   // AI Gateway binding for model calls
   "ai": {

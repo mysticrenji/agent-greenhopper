@@ -5,7 +5,7 @@ same change as any structural decision, new package, new dependency, or altered
 convention.** It is the fastest path to understanding this repository; if it goes
 stale it becomes a liability.
 
-Last updated: 2026-08-21 · Status: foundation + domain layer complete (alert-only)
+Last updated: 2026-08-22 · Status: foundation + domain layer complete (alert-only)
 
 ---
 
@@ -73,7 +73,7 @@ docs/                Architecture, ADRs, diagrams.
 | --- | --- |
 | `transport.ts` | Minimal structural `HttpFetch` — no DOM or Workers types. Throws `HassError` |
 | `schema.ts` | zod schemas for HA REST; `toSample` handles `unavailable`/`unknown` |
-| `entities.ts` | Mi Flora + climate-sensor entity ID mapping, registry schema |
+| `entities.ts` | Mi Flora + climate-sensor entity ID mapping, registry schema; battery is optional when HA does not expose it |
 | `reader.ts` | `HassReader`: states, latest samples, history. **No `callService`** |
 | `notifier.ts` | `HassNotifier`: `notify.*` only, service name validated against escape |
 | `services.ts` | Discovers available `notify.*` targets; resolves one with a documented preference order |
@@ -106,6 +106,9 @@ fails the suite rather than production. Reach the adapter through
 - The upsert uses `COALESCE(excluded.x, readings.x)`. Without it, a later write
   carrying no battery reading would erase the stored one, since battery arrives
   once a day while soil signals arrive every minute.
+- Battery telemetry is optional at the entity-mapping boundary: some BLE integrations
+  expose no battery entity. When absent, it is neither requested nor assessed; it is
+  never substituted with RSSI.
 - Resolved alerts are **deleted**, not flagged. The domain treats absent state as
   "new", which is exactly what should happen when a problem recurs after clearing.
 

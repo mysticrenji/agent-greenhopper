@@ -70,6 +70,22 @@ const PLANT_REGISTRY: PlantRegistry = [
     },
     watering: DEFAULT_WATERING_POLICY,
   },
+  {
+    id: 'curry-leaves',
+    name: 'Curry Leaves',
+    species: 'Murraya koenigii',
+    room: 'green-room',
+    targets: {
+      // Curry leaf prefers a warm, bright, well-drained setting; tune the DLI and EC
+      // bands against this plant's observed baseline rather than treating them as universal.
+      moisture: { min: 20, max: 50 },
+      soilTemp: { min: 18, max: 32 },
+      dli: { min: 4, max: 16 },
+      vpd: { min: 0.6, max: 1.6 },
+      conductivity: { min: 200, max: 1500 },
+    },
+    watering: DEFAULT_WATERING_POLICY,
+  },
 ];
 
 const ENTITY_REGISTRY: PlantEntities[] = [
@@ -78,6 +94,15 @@ const ENTITY_REGISTRY: PlantEntities[] = [
     deviceSlug: 'monstera_flower_care',
     airSensorSlug: 'living_room_climate',
   }),
+  {
+    plantId: 'curry-leaves',
+    moisture: 'sensor.ble_moisture_5c857e13542f',
+    soilTemp: 'sensor.ble_temperature_5c857e13542f',
+    lux: 'sensor.ble_illuminance_5c857e13542f',
+    conductivity: 'sensor.ble_conductivity_5c857e13542f',
+    airTemp: 'sensor.curry_leaves_temperature_2',
+    humidity: 'sensor.curry_leaves_humidity_2',
+  },
 ];
 
 const DEFAULT_MODEL = '@cf/ibm-granite/granite-4.0-h-micro';
@@ -133,7 +158,9 @@ async function processPlant(
   // Roll up into D1 for long-term retention
   const signalMap: Partial<Record<StorableSignal, readonly { value: number; at: number }[]>> = {};
   for (const [signal, key] of SIGNAL_ENTRIES) {
-    const series = history.get(entities[key]);
+    const entityId = entities[key];
+    if (!entityId) continue;
+    const series = history.get(entityId);
     if (series) signalMap[signal] = series;
   }
   const rows = rollupSeries(profile.id, signalMap);

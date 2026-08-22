@@ -25,6 +25,12 @@ describe('miFloraEntities', () => {
     expect(entities.humidity).toBe('sensor.living_room_climate_humidity');
     expect(entities.airTemp).not.toBe(entities.soilTemp);
   });
+
+  it('allows installations without a battery entity', () => {
+    const withoutBattery = { ...entities, battery: undefined };
+    expect(entityRegistrySchema.safeParse([withoutBattery]).success).toBe(true);
+    expect(entityIdsOf(withoutBattery)).toHaveLength(6);
+  });
 });
 
 describe('entityIdsOf', () => {
