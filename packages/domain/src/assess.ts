@@ -75,7 +75,8 @@ export interface PlantObservation {
   readonly soilTemp: Series;
   readonly lux: Series;
   readonly conductivity: Series;
-  readonly battery: Series;
+  /** Absent when Home Assistant exposes no battery telemetry for the probe. */
+  readonly battery?: Series;
   readonly airTemp: Series;
   readonly humidity: Series;
   /** Conductivity paired with the moisture reading taken at the same time. */
@@ -218,7 +219,8 @@ function checkSignalHealth(signal: SoilSignal, series: Series, now: number): Fin
   return findings;
 }
 
-function checkBattery(battery: Series): Finding[] {
+function checkBattery(battery: Series | undefined): Finding[] {
+  if (!battery) return [];
   const current = latest(battery);
   if (!current || current.value >= BATTERY_LOW_PCT) return [];
   return [
@@ -251,11 +253,15 @@ function assessSensors(observation: PlantObservation): Finding[] {
     ['soilTemp', observation.soilTemp],
     ['lux', observation.lux],
     ['conductivity', observation.conductivity],
-    ['battery', observation.battery],
   ];
+
+  const batteryFindings = observation.battery
+    ? checkSignalHealth('battery', observation.battery, observation.now)
+    : [];
 
   return [
     ...soilSeries.flatMap(([signal, series]) => checkSignalHealth(signal, series, observation.now)),
+    ...batteryFindings,
     ...checkBattery(observation.battery),
     ...checkAirSensor(observation),
     ...probeFailedToRespond(observation),

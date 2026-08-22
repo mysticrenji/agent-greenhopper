@@ -152,6 +152,17 @@ describe('buildObservation', () => {
     expect(observation.lastWateredAt).toBeNull();
   });
 
+  it('marks battery data unavailable when no battery entity is configured', () => {
+    const observation = buildObservation({
+      profile: PROFILE,
+      entities: { ...ENTITIES, battery: undefined },
+      history,
+      now: T0 + 3 * HOUR,
+    });
+
+    expect(observation.battery).toBeUndefined();
+  });
+
   it('infers lastWateredAt from the moisture series', () => {
     const watered = new Map(history);
     watered.set(ENTITIES.moisture, series([20, 19, 40]));

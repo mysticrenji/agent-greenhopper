@@ -70,11 +70,12 @@ function reportForPlant(
 ): PlantReport {
   const { plantId: _plantId, ...signals } = entities;
 
-  const reports: EntityReport[] = Object.entries(signals).map(([signal, entityId]) => ({
-    entityId,
-    signal: signal as EntityReport['signal'],
-    ...classify(states.get(entityId)),
-  }));
+  const reports: EntityReport[] = (
+    Object.entries(signals) as [EntityReport['signal'], string | undefined][]
+  ).flatMap(([signal, entityId]) => {
+    if (entityId === undefined) return [];
+    return [{ entityId, signal, ...classify(states.get(entityId)) }];
+  });
 
   const statusOf = (signal: string): EntityStatus | undefined =>
     reports.find((r) => r.signal === signal)?.status;

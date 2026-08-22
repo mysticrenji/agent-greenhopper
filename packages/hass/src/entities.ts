@@ -18,7 +18,8 @@ export const plantEntitiesSchema = z.object({
   soilTemp: z.string().min(1),
   lux: z.string().min(1),
   conductivity: z.string().min(1),
-  battery: z.string().min(1),
+  /** Optional: some BLE integrations expose no battery entity. */
+  battery: z.string().min(1).optional(),
   airTemp: z.string().min(1),
   humidity: z.string().min(1),
 });
@@ -68,7 +69,7 @@ export function miFloraEntities(args: MiFloraEntityArgs): PlantEntities {
 /** Every entity ID referenced by a plant, deduplicated. */
 export function entityIdsOf(entities: PlantEntities): string[] {
   const { plantId: _plantId, ...ids } = entities;
-  return [...new Set(Object.values(ids))];
+  return [...new Set(Object.values(ids).filter((id): id is string => id !== undefined))];
 }
 
 /** Every entity ID across a registry, deduplicated — shared air sensors collapse. */
