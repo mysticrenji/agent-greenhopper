@@ -277,7 +277,7 @@ wrangler secret put HASS_TOKEN
 
 # The HA base URL as seen from the tunnel (in-cluster address)
 wrangler secret put HASS_BASE_URL
-# When prompted, enter: http://home-assistant.home-assistant.svc.cluster.local:8123
+# When prompted, enter: http://home-assistant.home-assistant.svc.cluster.local
 ```
 
 Deploy:
@@ -320,45 +320,37 @@ curl https://greenhopper-agent.YOUR_SUBDOMAIN.workers.dev/run
 
 ### Step 11: Configure your plant registry
 
-Currently the plant registry is hardcoded in both Workers. To add your actual
-plants, edit the `PLANT_REGISTRY` and `ENTITY_REGISTRY` arrays in:
+Your plants live in [`config/plants.yaml`](config/plants.yaml). It is the one
+place to set a plant's name, preferred conditions, and Home Assistant sensor
+entity IDs. Both Workers use the same configuration.
 
-- `workers/mcp/src/index.ts`
-- `workers/agent/src/index.ts`
+1. Open `config/plants.yaml` in your editor.
+2. Copy an existing item under `plants:` and change its details. Keep the `id`
+   lowercase, using numbers and dashes only (for example, `boston-fern`).
+3. Set the entity IDs from Home Assistant's **Developer Tools → States** page.
+   Mi Flora needs moisture, soil temperature, light, and conductivity. Air
+   temperature and humidity come from the separate room sensor. `battery` is
+   optional.
+4. Generate the Worker-ready configuration and check it:
 
-Example for adding a fern:
+   ```bash
+   pnpm config:generate
+   pnpm config:check
+   ```
 
-```typescript
-// In PLANT_REGISTRY:
-{
-  id: 'fern',
-  name: 'Boston Fern',
-  species: 'Nephrolepis exaltata',
-  room: 'bathroom',
-  targets: {
-    moisture: { min: 40, max: 70 },
-    soilTemp: { min: 15, max: 25 },
-    dli: { min: 1, max: 6 },
-    vpd: { min: 0.3, max: 1.0 },
-    conductivity: { min: 200, max: 1000 },
-  },
-  watering: DEFAULT_WATERING_POLICY,
-},
+   The first command creates `packages/config/src/plants.generated.ts`. Do not
+   edit that generated file by hand; commit it together with `config/plants.yaml`.
 
-// In ENTITY_REGISTRY:
-miFloraEntities({
-  plantId: 'fern',
-  deviceSlug: 'boston_fern_flower_care',  // from HA device name
-  airSensorSlug: 'bathroom_climate',      // your room sensor
-}),
-```
-
-After editing, redeploy both Workers:
+5. Deploy both Workers so they receive the new configuration:
 
 ```bash
 cd workers/mcp && wrangler deploy
 cd ../agent && wrangler deploy
 ```
+
+If a value is missing or invalid, `pnpm config:check` or `pnpm typecheck` will
+show the problem before deployment. Configuration changes require deployment;
+there is no KV-backed live configuration in this project.
 
 ### Step 12: Connect MCP clients (optional)
 

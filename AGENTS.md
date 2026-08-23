@@ -5,7 +5,7 @@ same change as any structural decision, new package, new dependency, or altered
 convention.** It is the fastest path to understanding this repository; if it goes
 stale it becomes a liability.
 
-Last updated: 2026-08-22 · Status: foundation + domain layer complete (alert-only)
+Last updated: 2026-08-23 · Status: foundation + domain layer complete (alert-only)
 
 ---
 
@@ -48,11 +48,13 @@ room (for example `LYWSD03MMC`).
 packages/domain/     Pure logic: signals, metrics, assessment rules, alert policy.
                      Depends on nothing but zod. Fully unit tested.
 packages/hass/       Home Assistant adapter. READ-ONLY except notification send.
+packages/config/     Validates and exports the generated plant/entity registries.
 packages/storage/    D1 schema, migrations, repositories. Tested against real SQLite.
 workers/mcp/         Remote MCP server (createMcpHandler, SDK v2, stateless).
 workers/agent/       Scheduled cron Worker: assess → alert → notify pipeline.
 deploy/kubernetes/   cloudflared Deployment + NetworkPolicy for Workers VPC.
 deploy/terraform/    IaC: Tunnel, VPC Service, D1, R2 state bucket. State in R2.
+config/plants.yaml   Versioned source of truth for plant profiles and HA entity IDs.
 docs/                Architecture, ADRs, diagrams.
 ```
 
@@ -95,6 +97,17 @@ Storage tests run the real migration DDL and real queries against real SQLite vi
 fails the suite rather than production. Reach the adapter through
 `@greenhopper/storage/testing`; importing it from the package root would put
 `node:sqlite` in a Worker bundle, where it does not exist.
+
+### Plant configuration
+
+`config/plants.yaml` is the editable source of truth for `PLANT_REGISTRY` and
+`ENTITY_REGISTRY`. Run `pnpm config:generate` after editing it, and commit the
+resulting `packages/config/src/plants.generated.ts`. `@greenhopper/config`
+validates the generated data with the domain and HA schemas, including a
+one-to-one relationship between plant profiles and entity mappings. Both Workers
+import that package, so the configuration is deployed with their code and cannot
+drift between them. KV is deliberately not provisioned or bound: use it only if
+operator-managed configuration changes without a deployment become necessary.
 
 ### Schema notes worth knowing before editing
 
@@ -151,6 +164,8 @@ A violation of this rule is a review blocker, not a preference.
 
 ```bash
 pnpm install          # Corepack pins pnpm; do not use npm or yarn
+pnpm config:generate  # regenerate the typed plant registry after editing config/plants.yaml
+pnpm config:check     # fail if the generated registry is stale
 pnpm verify           # lint + typecheck + test — run before every commit
 pnpm lint             # Biome check
 pnpm lint:fix         # Biome check --write

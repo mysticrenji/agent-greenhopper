@@ -5,8 +5,7 @@
   "compatibility_date": "2025-07-01",
   "compatibility_flags": ["nodejs_compat"],
   // Hourly cron trigger
-  "triggers": {    "crons": ["0 * * * *"]
-  },
+  "triggers": { "crons": ["0 * * * *"] },
   // VPC Service binding to reach Home Assistant
   "vpc_services": [
     {

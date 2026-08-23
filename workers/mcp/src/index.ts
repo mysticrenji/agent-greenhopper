@@ -8,16 +8,11 @@
  * clients such as Claude, ChatGPT, or Kiro.
  */
 
-import type { PlantProfile, PlantRegistry } from '@greenhopper/domain';
-import { assess, DEFAULT_WATERING_POLICY, derive } from '@greenhopper/domain';
+import { ENTITY_REGISTRY, PLANT_REGISTRY } from '@greenhopper/config';
+import type { PlantProfile } from '@greenhopper/domain';
+import { assess, derive } from '@greenhopper/domain';
 import type { HttpFetch, HttpResponse } from '@greenhopper/hass';
-import {
-  buildObservation,
-  entityIdsOf,
-  HassReader,
-  miFloraEntities,
-  type PlantEntities,
-} from '@greenhopper/hass';
+import { buildObservation, entityIdsOf, HassReader, type PlantEntities } from '@greenhopper/hass';
 import { AlertStateRepository, type D1Like, ReadingsRepository } from '@greenhopper/storage';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
@@ -32,59 +27,6 @@ interface Env {
   HASS_BASE_URL: string;
   HASS_TOKEN: string;
 }
-
-// ---------------------------------------------------------------------------
-// Hardcoded example plant registry (production: KV or config)
-// ---------------------------------------------------------------------------
-
-const PLANT_REGISTRY: PlantRegistry = [
-  {
-    id: 'monstera',
-    name: 'Monstera Deliciosa',
-    species: 'Monstera deliciosa',
-    room: 'living-room',
-    targets: {
-      moisture: { min: 20, max: 60 },
-      soilTemp: { min: 15, max: 30 },
-      dli: { min: 4, max: 12 },
-      vpd: { min: 0.4, max: 1.6 },
-      conductivity: { min: 200, max: 1500 },
-    },
-    watering: DEFAULT_WATERING_POLICY,
-  },
-  {
-    id: 'curry-leaves',
-    name: 'Curry Leaves',
-    species: 'Murraya koenigii',
-    room: 'green-room',
-    targets: {
-      // Tune light and EC against this plant's observed baseline after collecting history.
-      moisture: { min: 20, max: 50 },
-      soilTemp: { min: 18, max: 32 },
-      dli: { min: 4, max: 16 },
-      vpd: { min: 0.6, max: 1.6 },
-      conductivity: { min: 200, max: 1500 },
-    },
-    watering: DEFAULT_WATERING_POLICY,
-  },
-];
-
-const ENTITY_REGISTRY: PlantEntities[] = [
-  miFloraEntities({
-    plantId: 'monstera',
-    deviceSlug: 'monstera_flower_care',
-    airSensorSlug: 'living_room_climate',
-  }),
-  {
-    plantId: 'curry-leaves',
-    moisture: 'sensor.ble_moisture_5c857e13542f',
-    soilTemp: 'sensor.ble_temperature_5c857e13542f',
-    lux: 'sensor.ble_illuminance_5c857e13542f',
-    conductivity: 'sensor.ble_conductivity_5c857e13542f',
-    airTemp: 'sensor.curry_leaves_temperature_2',
-    humidity: 'sensor.curry_leaves_humidity_2',
-  },
-];
 
 // ---------------------------------------------------------------------------
 // Adapter: VPC Fetcher -> HttpFetch

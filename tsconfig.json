@@ -3,6 +3,7 @@
   "references": [
     { "path": "./packages/domain" },
     { "path": "./packages/hass" },
+    { "path": "./packages/config" },
     { "path": "./packages/storage" },
     { "path": "./workers/mcp" },
     { "path": "./workers/agent" }

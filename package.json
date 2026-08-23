@@ -11,6 +11,9 @@
   },
   "scripts": {
     "prepare": "git config core.hooksPath .githooks",
+    "config:generate": "node scripts/generate-plant-config.mjs",
+    "config:check": "node scripts/generate-plant-config.mjs --check",
+    "pretypecheck": "pnpm config:check",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
@@ -18,7 +21,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "verify": "pnpm run lint && pnpm run typecheck && pnpm run test",
+    "verify": "pnpm config:check && pnpm run lint && pnpm run typecheck && pnpm run test",
     "clean": "rm -rf packages/*/dist workers/*/dist packages/*/*.tsbuildinfo workers/*/*.tsbuildinfo *.tsbuildinfo"
   },
   "devDependencies": {
@@ -26,6 +29,7 @@
     "@types/node": "24.10.1",
     "@vitest/coverage-v8": "4.1.10",
     "typescript": "6.0.3",
-    "vitest": "4.1.10"
+    "vitest": "4.1.10",
+    "yaml": "2.8.2"
   }
 }
