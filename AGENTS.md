@@ -111,6 +111,9 @@ fails the suite rather than production. Reach the adapter through
   never substituted with RSSI.
 - Resolved alerts are **deleted**, not flagged. The domain treats absent state as
   "new", which is exactly what should happen when a problem recurs after clearing.
+- Sensor-health alert codes are signal-scoped (for example
+  `SENSOR_STALE:moisture`), so simultaneous probe failures have distinct alert
+  state and never collide on `alert_state`'s `(plant_id, code)` key.
 
 ### Two questions the code answers instead of the operator
 

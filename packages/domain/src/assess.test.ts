@@ -88,17 +88,29 @@ describe('assess — sensor health', () => {
   it('flags a stale moisture reading', () => {
     // Newest sample is an hour old, well past the 10-minute moisture budget.
     const result = assess(observation({ moisture: fresh(35, 20, MINUTE, NOW - HOUR) }));
-    expect(codes(result.findings)).toContain('SENSOR_STALE');
+    expect(codes(result.findings)).toContain('SENSOR_STALE:moisture');
+  });
+
+  it('identifies each stale sensor independently for alert-state persistence', () => {
+    const stale = fresh(35, 20, MINUTE, NOW - HOUR);
+    const result = assess(observation({ moisture: stale, soilTemp: stale }));
+
+    expect(codes(result.findings)).toEqual(
+      expect.arrayContaining([
+        'SENSOR_STALE:moisture' as FindingCode,
+        'SENSOR_STALE:soilTemp' as FindingCode,
+      ]),
+    );
   });
 
   it('does not flag a day-old battery reading', () => {
     const result = assess(observation({ battery: [{ value: 80, at: NOW - 23 * HOUR }] }));
-    expect(codes(result.findings)).not.toContain('SENSOR_STALE');
+    expect(codes(result.findings)).not.toContain('SENSOR_STALE:battery');
   });
 
   it('flags a probe pinned at a range limit as critical', () => {
     const result = assess(observation({ moisture: fresh(0) }));
-    expect(codes(result.findings)).toContain('SENSOR_PINNED');
+    expect(codes(result.findings)).toContain('SENSOR_PINNED:moisture');
     expect(result.severity).toBe('critical');
   });
 
@@ -109,7 +121,7 @@ describe('assess — sensor health', () => {
 
   it('does not report a sensor fault when battery telemetry is not configured', () => {
     const result = assess(observation({ battery: undefined }));
-    expect(codes(result.findings)).not.toContain('SENSOR_STALE');
+    expect(codes(result.findings)).not.toContain('SENSOR_STALE:battery');
     expect(codes(result.findings)).not.toContain('BATTERY_LOW');
   });
 
