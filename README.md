@@ -1,5 +1,7 @@
 # agent-greenhopper
 
+![Plant monitoring with smart sensors](images/landingpage.png)
+
 A plant-monitoring agent. Xiaomi Mi Flora sensors report to Home Assistant on a
 Raspberry Pi; an agent on Cloudflare Workers reads that data hourly, assesses
 plant health, and sends you a notification. A remote MCP server exposes the same

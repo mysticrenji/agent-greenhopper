@@ -250,13 +250,42 @@ async function releaseLock(db: D1Like, lockId: string): Promise<void> {
   await db.prepare('DELETE FROM run_lock WHERE id = ?').bind(lockId).run();
 }
 
+// --- Per-plant collection (extracted to keep checkPlants under complexity cap) ---
+async function collectPlantFindings(
+  env: Env,
+  plantCtx: PlantContext,
+): Promise<{
+  findingsByPlant: Map<string, readonly Finding[]>;
+  aiExplanations: Map<string, string>;
+}> {
+  const findingsByPlant = new Map<string, readonly Finding[]>();
+  const aiExplanations = new Map<string, string>();
+
+  for (const profile of PLANT_REGISTRY) {
+    const entities = ENTITY_REGISTRY.find((e) => e.plantId === profile.id);
+    if (!entities) continue;
+    try {
+      const { findings, aiExplanation } = await processPlant(env, profile, entities, plantCtx);
+      findingsByPlant.set(profile.id, findings);
+      if (aiExplanation) aiExplanations.set(profile.id, aiExplanation);
+    } catch (error) {
+      console.error(
+        `Failed to process plant "${profile.id}":`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
+  return { findingsByPlant, aiExplanations };
+}
+
 // --- Main check pipeline ---
 async function checkPlants(env: Env): Promise<void> {
   const db = env.DB as unknown as D1Like;
 
   const locked = await acquireLock(db, RUN_LOCK_ID, RUN_LOCK_TTL_MS);
   if (!locked) {
-    console.log('Run already in progress, skipping.');
+    console.warn('Run already in progress, skipping.');
     return;
   }
 
@@ -280,24 +309,8 @@ async function checkPlants(env: Env): Promise<void> {
 
     const plantIds = PLANT_REGISTRY.map((p) => p.id);
     const previousStates = await alertStateRepo.loadForPlants(plantIds);
-    const findingsByPlant = new Map<string, readonly Finding[]>();
-    const aiExplanations = new Map<string, string>();
     const plantCtx: PlantContext = { reader, readingsRepo, now };
-
-    for (const profile of PLANT_REGISTRY) {
-      const entities = ENTITY_REGISTRY.find((e) => e.plantId === profile.id);
-      if (!entities) continue;
-      try {
-        const { findings, aiExplanation } = await processPlant(env, profile, entities, plantCtx);
-        findingsByPlant.set(profile.id, findings);
-        if (aiExplanation) aiExplanations.set(profile.id, aiExplanation);
-      } catch (error) {
-        console.error(
-          `Failed to process plant "${profile.id}":`,
-          error instanceof Error ? error.message : error,
-        );
-      }
-    }
+    const { findingsByPlant, aiExplanations } = await collectPlantFindings(env, plantCtx);
 
     // Plan alerts (dedup, suppress, resolve based on stored state)
     const plan = planAlerts({ now, policy: DEFAULT_ALERT_POLICY, findingsByPlant, previousStates });
