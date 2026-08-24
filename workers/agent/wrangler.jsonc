@@ -2,11 +2,15 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "greenhopper-agent",
   "main": "src/index.ts",
+  // Required secrets (set via `wrangler secret put`):
+  //   HASS_TOKEN              — Home Assistant long-lived access token
+  //   HASS_BASE_URL           — HA base URL as seen from the tunnel
+  //   RUN_ACCESS_CLIENT_ID    — CF Access service-token client ID for /run
+  //   RUN_ACCESS_CLIENT_SECRET— CF Access service-token client secret for /run
   "compatibility_date": "2025-07-01",
   "compatibility_flags": ["nodejs_compat"],
   // Hourly cron trigger
-  "triggers": {    "crons": ["0 * * * *"]
-  },
+  "triggers": { "crons": ["0 * * * *"] },
   // VPC Service binding to reach Home Assistant
   "vpc_services": [
     {

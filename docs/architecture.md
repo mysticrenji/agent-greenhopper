@@ -33,14 +33,12 @@ flowchart LR
 
         subgraph WORKERS["Workers"]
             MCP["workers/mcp<br/>createMcpHandler (stateless)<br/>Access OAuth · read-only tools"]
-            AGENT["workers/agent<br/>Agent / Durable Object<br/>cron: 0 * * * *"]
+            AGENT["workers/agent<br/>cron Worker<br/>0 * * * *"]
             CORE["packages/domain<br/>metrics · assess · ALERT POLICY"]
         end
 
         subgraph STORE["Storage"]
-            D1["D1<br/>hourly rollups<br/>alert state · audit log"]
-            DOSQL["DO SQLite<br/>agent state"]
-            KV["KV<br/>OAuth tokens"]
+            D1["D1<br/>15-min rollups<br/>alert state · audit log"]
         end
 
         GW["AI Gateway<br/>spend + rate limits"]
@@ -53,9 +51,7 @@ flowchart LR
     MCP --> CORE
     AGENT --> CORE
     AGENT --> D1
-    AGENT --> DOSQL
     MCP --> D1
-    MCP --> KV
     AGENT --> GW
     GW --> LLM
     AGENT -- "alerts" --> VPC
@@ -65,7 +61,7 @@ flowchart LR
     classDef cloud fill:#e3f2fd,stroke:#1e88e5,color:#0d47a1
     classDef ext fill:#f3e5f5,stroke:#8e24aa,color:#4a148c
     class MIFLORA,RHSENSOR,PROXY,HA,NOTIFY,CFD home
-    class VPC,MCP,AGENT,CORE,D1,DOSQL,KV,GW cloud
+    class VPC,MCP,AGENT,CORE,D1,GW cloud
     class LLM,CLIENTS ext
 ```
 
@@ -75,7 +71,7 @@ flowchart LR
 | --- | --- |
 | Workers VPC, not a public HA hostname | HA stays off the internet; VPC Services pin routing to one host:port, so a compromised Worker cannot scan the LAN. Free during open beta. |
 | **Alert-only, no actuation** (ADR 0003) | Blast radius drops to "noisy notification" instead of "drowned plant". `guardrails.ts` stays dormant and tested for a possible future. |
-| `createMcpHandler`, not `McpAgent` | `McpAgent` is deprecated and feature-frozen. Stateless handler = no MCP session; durable state goes to D1/KV/DO. |
+| `createMcpHandler`, not `McpAgent` | `McpAgent` is deprecated and feature-frozen. Stateless handler = no MCP session; durable state goes to D1. |
 | Alert policy in `packages/domain` | Suppression, escalation, quiet hours and recovery are enforced in code the LLM cannot route around — not in the prompt. |
 | Agent imports domain directly | MCP between two Workers you own adds a hop and auth for no isolation gain. Same functions are exposed as MCP tools for external clients. |
 | D1 rollups every 15 min | HA's recorder purges detail after ~10 days. D1 gives multi-month trends, which is what makes dry-down comparison possible. |
@@ -83,7 +79,7 @@ flowchart LR
 
 ## Control flow (hourly)
 
-1. Durable Object alarm fires the `checkPlants` cron callback.
+1. Cron Trigger fires the `checkPlants` pipeline.
 2. Agent reads current state from HA via the VPC binding, and trend history from D1.
 3. `derive()` converts raw signals into VPD, DLI, dry-down slope, and normalised EC.
 4. `assess()` runs the deterministic rules, producing severity-tagged findings.
@@ -111,19 +107,16 @@ reasoning run hourly.
 | Workers Paid plan | — | — | **$5.00** (account minimum) |
 | Worker requests | ~4k/mo | 10M/mo | $0 |
 | Worker CPU time | ~0.7M CPU-ms/mo | 30M CPU-ms/mo | $0 |
-| DO requests (alarms) | ~3.7k/mo | 1M/mo | $0 |
-| DO duration | ~4,700 GB-s/mo | 400,000 GB-s/mo | $0 |
 | D1 rows written | ~24k/mo | 50M/mo | $0 |
 | D1 rows read | ~4M/mo | 25B/mo | $0 |
-| D1 + DO SQLite storage | < 50 MB | 5 GB each | $0 |
-| KV (OAuth, kill switch) | ~thousands of reads | 10M reads / 1M writes | $0 |
+| D1 storage | < 50 MB | 5 GB | $0 |
 | Workers VPC | 1 service | free during open beta | $0 |
 | Cloudflare Tunnel | 1 tunnel | free | $0 |
 | Workers Logs | ~10k events/mo | 20M events/mo | $0 |
 
-Headroom is large — DO duration is the tightest line at roughly 1% of the
-included allowance, so this design could run ~80× more often before Cloudflare
-usage charges begin.
+Headroom is large — all line items sit at roughly 1% or less of the included
+allowances, so this design could run ~80× more often before Cloudflare usage
+charges begin.
 
 ### LLM tokens
 
@@ -181,19 +174,17 @@ Cloudflare offers both, and only one actually stops anything.
 
 Do not treat a budget alert as protection; it reports after the fact.
 
-**Recommended for greenhopper:** route Workers AI *through* AI Gateway rather
-than calling `env.AI` directly — that is what makes spend and rate limits apply
-to it, and it gives you request logs. Then set a spend limit of ~$2/day, a rate
-limit of ~5 req/min (60× headroom over the one call/hour the design needs),
-`limits.cpu_ms: 30000`, and a $10 budget alert as an email backstop.
+**Recommended for greenhopper:** Currently calls `env.AI` directly. For
+production, route through AI Gateway to get spend and rate limits — that is what
+makes them apply, and it gives you request logs. Then set a spend limit of
+~$2/day, a rate limit of ~5 req/min (60× headroom over the one call/hour the
+design needs), `limits.cpu_ms: 30000`, and a $10 budget alert as an email
+backstop.
 
 The financial exposure here is small, and with `granite-4.0-h-micro` inside the
 free Neuron allocation the LLM cost is zero. The remaining runaway risk is
 notification spam rather than money or hardware — the system cannot actuate
 anything (ADR 0003). That risk is handled by `alerts.ts`, not by billing controls.
-Use `idempotent: true` on delayed schedules created in `onStart()` — cron
-schedules dedupe by default, delayed ones accumulate a row on every Durable Object
-restart.
 
 ## Monitored signals
 
@@ -396,4 +387,3 @@ bundle.
 - ESPHome **ESP32** Bluetooth proxies deployed for BLE coverage; the HA container needs no D-Bus mount or elevated capabilities (ADR 0005).
 - One air temp/humidity sensor per room for VPD.
 - A dedicated Home Assistant user with only plant entities exposed; long-lived token stored as a Worker secret.
-- Workers plan that covers Durable Objects.

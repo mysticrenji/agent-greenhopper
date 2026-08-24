@@ -84,7 +84,9 @@ export function migrationSql(): string[] {
   const migrationsDir = join(here, '..', '..', 'migrations');
   // Listed explicitly rather than globbed so that adding a migration is a visible
   // change here, and ordering can never depend on filesystem iteration order.
-  return ['0001_init.sql'].map((file) => readFileSync(join(migrationsDir, file), 'utf8'));
+  return ['0001_init.sql', '0002_run_lock.sql'].map((file) =>
+    readFileSync(join(migrationsDir, file), 'utf8'),
+  );
 }
 
 /** In-memory database with all migrations applied. */

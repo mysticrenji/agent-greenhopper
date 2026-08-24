@@ -81,6 +81,16 @@ variable "ha_port" {
   default     = 8123
 }
 
+variable "mcp_worker_domain" {
+  type        = string
+  description = "Public domain of the MCP worker (e.g. greenhopper-mcp.mysubdomain.workers.dev)"
+}
+
+variable "allowed_emails" {
+  type        = list(string)
+  description = "Email addresses allowed to access the MCP endpoint via Cloudflare Access"
+}
+
 # ---------------------------------------------------------------------------
 # Cloudflare Tunnel (remotely-managed)
 # ---------------------------------------------------------------------------
@@ -141,6 +151,35 @@ resource "cloudflare_d1_database" "greenhopper" {
 # }
 
 # ---------------------------------------------------------------------------
+# Cloudflare Access — protect the MCP endpoint
+# ---------------------------------------------------------------------------
+
+resource "cloudflare_zero_trust_access_application" "mcp" {
+  account_id = var.account_id
+  name       = "greenhopper-mcp"
+  domain     = var.mcp_worker_domain
+  type       = "self_hosted"
+
+  session_duration = "24h"
+}
+
+resource "cloudflare_zero_trust_access_policy" "mcp_allow_emails" {
+  account_id     = var.account_id
+  application_id = cloudflare_zero_trust_access_application.mcp.id
+  name           = "Allow configured emails"
+  decision       = "allow"
+  precedence     = 1
+
+  include = [
+    {
+      email = {
+        email = var.allowed_emails
+      }
+    }
+  ]
+}
+
+# ---------------------------------------------------------------------------
 # Outputs — feed these into wrangler.jsonc or CI
 # ---------------------------------------------------------------------------
 
@@ -163,4 +202,9 @@ output "vpc_service_id" {
 output "d1_database_id" {
   value       = cloudflare_d1_database.greenhopper.id
   description = "D1 Database ID — put in wrangler.jsonc d1_databases[].database_id"
+}
+
+output "cf_access_aud" {
+  value       = cloudflare_zero_trust_access_application.mcp.aud
+  description = "Cloudflare Access AUD tag — set as CF_ACCESS_AUD secret in the MCP worker"
 }
