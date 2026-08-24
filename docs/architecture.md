@@ -14,14 +14,16 @@ flowchart LR
     subgraph HOME["🏠 Home network"]
         MIFLORA["Mi Flora HHCCJCY01 ×N<br/>moisture · soil temp<br/>lux · fertility (EC) · battery"]
         RHSENSOR["LYWSD03MMC (per room)<br/>air temp · humidity → VPD"]
-        PROXY["ESPHome ESP32 BLE proxy<br/>active connections required<br/>for battery (ADR 0005)"]
-        HA["HA pod · :8123 read-only<br/>xiaomi_ble · recorder 10d<br/>no D-Bus, no NET_ADMIN"]
+        BT["Raspberry Pi Bluetooth adapter<br/>BlueZ host service · active + passive BLE"]
+        DBUS["System D-Bus<br/>/run/dbus mounted read-only"]
+        HA["privileged HA pod · :8123 read-only<br/>xiaomi_ble · recorder 10d"]
         NOTIFY["notify.mobile_app_*<br/>push to phone"]
         CFD["cloudflared pod<br/>pinned ≥ 2025.7.0 · QUIC<br/>fixed replicas, no autoscale"]
 
-        MIFLORA -. BLE .-> PROXY
-        RHSENSOR -. BLE .-> PROXY
-        PROXY -- "LAN" --> HA
+        MIFLORA -. "BLE advertisements + battery reads" .-> BT
+        RHSENSOR -. BLE .-> BT
+        BT == "host D-Bus" ==> DBUS
+        DBUS == "mounted socket" ==> HA
         HA <-- "cluster DNS<br/>:8123" --> CFD
         HA --> NOTIFY
     end
@@ -60,7 +62,7 @@ flowchart LR
     classDef home fill:#e8f5e9,stroke:#43a047,color:#1b5e20
     classDef cloud fill:#e3f2fd,stroke:#1e88e5,color:#0d47a1
     classDef ext fill:#f3e5f5,stroke:#8e24aa,color:#4a148c
-    class MIFLORA,RHSENSOR,PROXY,HA,NOTIFY,CFD home
+    class MIFLORA,RHSENSOR,BT,DBUS,HA,NOTIFY,CFD home
     class VPC,MCP,AGENT,CORE,D1,GW cloud
     class LLM,CLIENTS ext
 ```
@@ -305,9 +307,9 @@ partially improves does not re-trigger.
 ### Hardware: Xiaomi Mi Flora (HHCCJCY01)
 
 Integrated via HA's **Xiaomi BLE** (`xiaomi_ble`) integration. Because Home
-Assistant runs as a container, BLE arrives through **ESPHome ESP32 Bluetooth
-proxies** rather than a host adapter — see ADR 0005 for why that is effectively
-mandatory here, and why Shelly/SMLIGHT proxies will not do.
+Assistant runs as a privileged Kubernetes pod and uses the Raspberry Pi's host
+Bluetooth adapter through a read-only `/run/dbus` mount — see ADR 0006. BlueZ
+stays on the host; the HA pod must be scheduled to that node.
 
 Five quirks that shape the code:
 
@@ -342,8 +344,8 @@ definitively and should be an explicit rule in `get_sensor_health`.
 
 Also note EC reads near zero in very dry soil, which compounds the
 moisture-confound problem in gotcha 4 above. Expect ~12 months of battery life.
-If plants are spread across rooms, add ESPHome Bluetooth Proxy nodes — BLE range
-is roughly 10 m and degrades badly through walls.
+The Raspberry Pi adapter's BLE range is roughly 10 m and degrades badly through
+walls, so adapter placement is part of the deployment design.
 
 ### D1 schema
 
@@ -384,6 +386,7 @@ bundle.
 - `cloudflared` image tag pinned to >= 2025.7.0, QUIC transport (`auto` or `quic`), outbound UDP 7844 permitted, fixed replica count (no autoscaling).
 - VPC Service pointed at Home Assistant's in-cluster address (for example `home-assistant.<ns>.svc.cluster.local:8123`) — no Ingress or public hostname needed.
 - Mi Flora firmware >= 3.2.1 on every unit (check via Flower Care app → Hardware settings → Hardware update).
-- ESPHome **ESP32** Bluetooth proxies deployed for BLE coverage; the HA container needs no D-Bus mount or elevated capabilities (ADR 0005).
+- BlueZ running on the Raspberry Pi host; the privileged HA pod mounts
+  `/run/dbus` read-only and is scheduled to the Bluetooth adapter's node (ADR 0006).
 - One air temp/humidity sensor per room for VPD.
 - A dedicated Home Assistant user with only plant entities exposed; long-lived token stored as a Worker secret.

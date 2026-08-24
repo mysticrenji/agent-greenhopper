@@ -273,11 +273,10 @@ Carry these until answered; they gate later phases.
   `deploy/kubernetes/`. `cloudflared` image tag is pinned to satisfy the Workers
   VPC >= 2025.7.0 requirement, with a fixed replica count and no autoscaling
   (ADR 0005).
-- BLE ingestion: **ESPHome ESP32 Bluetooth proxies**, not host Bluetooth. A
-  containerised HA would otherwise need a D-Bus mount plus `NET_ADMIN`/`NET_RAW`
-  and would run in a degraded mode that drops raw advertising data — which is
-  exactly what Mi Flora relies on. Shelly and SMLIGHT proxies are unsuitable:
-  they cannot make active connections, so battery level would be lost (ADR 0005).
+- BLE ingestion: the Raspberry Pi's Bluetooth adapter is exposed to the
+  **privileged** Home Assistant pod through a read-only `/run/dbus` mount. BlueZ
+  stays on the host and the HA pod must be scheduled to the adapter's node; this
+  supports both Mi Flora advertisements and active battery reads (ADR 0006).
 - Time zone: **`Europe/Amsterdam`**, quiet hours 22:00–07:00 local, DST-aware.
 
 ## 13. Known gaps
