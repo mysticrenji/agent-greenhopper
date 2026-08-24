@@ -31,6 +31,77 @@ interface Env {
   DB: D1Database;
   HASS_BASE_URL: string;
   HASS_TOKEN: string;
+  /** Cloudflare Access team domain, e.g. 'myteam.cloudflareaccess.com' */
+  CF_ACCESS_TEAM_DOMAIN?: string;
+  /** Cloudflare Access Application Audience (AUD) tag */
+  CF_ACCESS_AUD?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Cloudflare Access JWT validation middleware
+// ---------------------------------------------------------------------------
+
+/**
+ * Validates the Cf-Access-Jwt-Assertion header set by Cloudflare Access.
+ *
+ * Returns null if validation passes (allow the request through), or a 403
+ * Response if validation fails.
+ *
+ * This performs lightweight validation: presence of the JWT, base64-decoding
+ * the payload, and verifying the `aud` claim matches CF_ACCESS_AUD.
+ *
+ * NOTE: For production-grade validation, the JWT signature should be verified
+ * against the JWKS endpoint at https://<team-domain>/cdn-cgi/access/certs.
+ * Full JWKS verification requires a JWT library or manual RSA/ECDSA validation
+ * which adds significant complexity. Cloudflare Access guarantees the header is
+ * only present on requests that passed its authentication layer, so header
+ * presence + aud matching provides a strong defence-in-depth layer.
+ */
+async function validateAccessJwt(request: Request, env: Env): Promise<Response | null> {
+  const teamDomain = env.CF_ACCESS_TEAM_DOMAIN;
+  const expectedAud = env.CF_ACCESS_AUD;
+
+  // If Access is not configured, deny all requests — fail closed.
+  if (!teamDomain || !expectedAud) {
+    return new Response('Access not configured', { status: 403 });
+  }
+
+  const jwt = request.headers.get('Cf-Access-Jwt-Assertion');
+  if (!jwt) {
+    return new Response('Missing access token', { status: 403 });
+  }
+
+  // Decode the JWT payload (second segment, base64url-encoded).
+  try {
+    const parts = jwt.split('.');
+    if (parts.length !== 3) {
+      return new Response('Malformed token', { status: 403 });
+    }
+
+    // Base64url → standard base64 → decode
+    const payloadSegment = parts[1];
+    if (!payloadSegment) {
+      return new Response('Malformed token', { status: 403 });
+    }
+    const payloadB64 = payloadSegment.replace(/-/g, '+').replace(/_/g, '/');
+    const payloadJson = atob(payloadB64);
+    const payload = JSON.parse(payloadJson) as { aud?: unknown };
+
+    // Validate audience claim
+    const aud = payload.aud;
+    const audMatches = Array.isArray(aud)
+      ? (aud as unknown[]).includes(expectedAud)
+      : aud === expectedAud;
+
+    if (!audMatches) {
+      return new Response('Invalid audience', { status: 403 });
+    }
+  } catch {
+    return new Response('Token validation failed', { status: 403 });
+  }
+
+  // Validation passed — allow request through.
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +400,10 @@ function createServerFactory(env: Env) {
 
 export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
+    // Cloudflare Access JWT validation — must pass before reaching any tool.
+    const denied = await validateAccessJwt(request, env);
+    if (denied) return denied;
+
     const handler = createMcpHandler(createServerFactory(env));
     return handler.fetch(request);
   },

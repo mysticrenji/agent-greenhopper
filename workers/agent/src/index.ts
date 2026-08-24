@@ -52,6 +52,12 @@ interface Env {
   AI_MODEL?: string;
   // Optional: explicit notify service
   NOTIFY_SERVICE?: string;
+  // Service-token auth for the /run endpoint.
+  // Set via: wrangler secret put RUN_ACCESS_CLIENT_ID
+  //          wrangler secret put RUN_ACCESS_CLIENT_SECRET
+  // If not set, the /run endpoint returns 503 (disabled).
+  RUN_ACCESS_CLIENT_ID?: string;
+  RUN_ACCESS_CLIENT_SECRET?: string;
 }
 
 // --- Hardcoded registry (same as workers/mcp, move to KV in prod) ---
@@ -149,7 +155,7 @@ async function processPlant(
   profile: PlantProfile,
   entities: PlantEntities,
   ctx: PlantContext,
-): Promise<readonly Finding[]> {
+): Promise<{ findings: readonly Finding[]; aiExplanation: string | null }> {
   const ids = entityIdsOf(entities);
   const windowStart = ctx.now - HISTORY_WINDOW_MS;
 
@@ -171,65 +177,137 @@ async function processPlant(
   const assessment = assess(observation);
 
   // LLM escalation when rules flag something beyond their reach
+  let aiExplanation: string | null = null;
   if (assessment.escalate) {
-    await escalateToModel(env, profile, assessment);
+    aiExplanation = await escalateToModel(env, profile, assessment);
   }
 
-  return assessment.findings;
+  return { findings: assessment.findings, aiExplanation };
 }
 
 /** Send push notifications for actions that merit them. */
 async function deliverNotifications(
   notifier: HassNotifier,
   actions: readonly import('@greenhopper/domain').AlertAction[],
+  aiExplanations?: Map<string, string>,
 ): Promise<void> {
   for (const action of actions) {
     if (action.kind === 'notify' && action.channel === 'push') {
-      await notifier.send({ title: `🌱 ${action.plantId}`, message: action.message });
+      const explanation = aiExplanations?.get(action.plantId);
+      const message = explanation ? `${action.message}\n\n💡 ${explanation}` : action.message;
+      await notifier.send({ title: `🌱 ${action.plantId}`, message });
     } else if (action.kind === 'resolve') {
       await notifier.send({ title: `✅ ${action.plantId}`, message: action.message });
     }
   }
 }
 
+// --- Service-token auth for /run ---
+/**
+ * Verify Cloudflare Access service-token headers against stored secrets.
+ * Returns 'ok' if valid, 'disabled' if secrets are not configured, 'denied' if
+ * the provided credentials do not match.
+ */
+function verifyServiceToken(request: Request, env: Env): 'ok' | 'disabled' | 'denied' {
+  if (!env.RUN_ACCESS_CLIENT_ID || !env.RUN_ACCESS_CLIENT_SECRET) {
+    return 'disabled';
+  }
+  const clientId = request.headers.get('CF-Access-Client-Id');
+  const clientSecret = request.headers.get('CF-Access-Client-Secret');
+  if (clientId === env.RUN_ACCESS_CLIENT_ID && clientSecret === env.RUN_ACCESS_CLIENT_SECRET) {
+    return 'ok';
+  }
+  return 'denied';
+}
+
+// --- Run locking ---
+const RUN_LOCK_ID = 'check-plants';
+const RUN_LOCK_TTL_MS = 5 * 60_000; // 5 minutes
+
+/**
+ * Acquire an exclusive run lock. Cleans up expired leases first, then attempts
+ * an INSERT OR IGNORE. If the row already exists (held by another run), the
+ * insert is a no-op and we detect that via a subsequent SELECT.
+ */
+async function acquireLock(db: D1Like, lockId: string, ttlMs: number): Promise<boolean> {
+  const now = Date.now();
+  // Purge expired locks so a crashed run never blocks indefinitely
+  await db.prepare('DELETE FROM run_lock WHERE acquired_at + ttl_ms < ?').bind(now).run();
+  // Attempt to claim
+  await db
+    .prepare('INSERT OR IGNORE INTO run_lock (id, acquired_at, ttl_ms) VALUES (?, ?, ?)')
+    .bind(lockId, now, ttlMs)
+    .run();
+  // Verify we hold the lock by checking the acquired_at matches what we just wrote
+  const row = await db
+    .prepare('SELECT acquired_at FROM run_lock WHERE id = ?')
+    .bind(lockId)
+    .first<{ acquired_at: number }>();
+  return row?.acquired_at === now;
+}
+
+async function releaseLock(db: D1Like, lockId: string): Promise<void> {
+  await db.prepare('DELETE FROM run_lock WHERE id = ?').bind(lockId).run();
+}
+
 // --- Main check pipeline ---
 async function checkPlants(env: Env): Promise<void> {
-  const now = Date.now();
-  const http = createHttpFetch(env);
-  const config = { baseUrl: env.HASS_BASE_URL, token: env.HASS_TOKEN };
-  const reader = new HassReader(http, config);
   const db = env.DB as unknown as D1Like;
-  const readingsRepo = new ReadingsRepository(db);
-  const alertStateRepo = new AlertStateRepository(db);
-  const notificationLog = new NotificationLog(db);
 
-  // Resolve notify target at runtime (self-discovering, no config needed)
-  const available = await listNotifyServices(http, config);
-  const resolution = resolveNotifyTarget(available, env.NOTIFY_SERVICE);
-  if (!resolution) {
-    console.error('No notify services available in Home Assistant. Aborting.');
+  const locked = await acquireLock(db, RUN_LOCK_ID, RUN_LOCK_TTL_MS);
+  if (!locked) {
+    console.log('Run already in progress, skipping.');
     return;
   }
-  const notifier = new HassNotifier(http, config, resolution.service);
 
-  const plantIds = PLANT_REGISTRY.map((p) => p.id);
-  const previousStates = await alertStateRepo.loadForPlants(plantIds);
-  const findingsByPlant = new Map<string, readonly Finding[]>();
-  const plantCtx: PlantContext = { reader, readingsRepo, now };
+  try {
+    const now = Date.now();
+    const http = createHttpFetch(env);
+    const config = { baseUrl: env.HASS_BASE_URL, token: env.HASS_TOKEN };
+    const reader = new HassReader(http, config);
+    const readingsRepo = new ReadingsRepository(db);
+    const alertStateRepo = new AlertStateRepository(db);
+    const notificationLog = new NotificationLog(db);
 
-  for (const profile of PLANT_REGISTRY) {
-    const entities = ENTITY_REGISTRY.find((e) => e.plantId === profile.id);
-    if (!entities) continue;
-    const findings = await processPlant(env, profile, entities, plantCtx);
-    findingsByPlant.set(profile.id, findings);
+    // Resolve notify target at runtime (self-discovering, no config needed)
+    const available = await listNotifyServices(http, config);
+    const resolution = resolveNotifyTarget(available, env.NOTIFY_SERVICE);
+    if (!resolution) {
+      console.error('No notify services available in Home Assistant. Aborting.');
+      return;
+    }
+    const notifier = new HassNotifier(http, config, resolution.service);
+
+    const plantIds = PLANT_REGISTRY.map((p) => p.id);
+    const previousStates = await alertStateRepo.loadForPlants(plantIds);
+    const findingsByPlant = new Map<string, readonly Finding[]>();
+    const aiExplanations = new Map<string, string>();
+    const plantCtx: PlantContext = { reader, readingsRepo, now };
+
+    for (const profile of PLANT_REGISTRY) {
+      const entities = ENTITY_REGISTRY.find((e) => e.plantId === profile.id);
+      if (!entities) continue;
+      try {
+        const { findings, aiExplanation } = await processPlant(env, profile, entities, plantCtx);
+        findingsByPlant.set(profile.id, findings);
+        if (aiExplanation) aiExplanations.set(profile.id, aiExplanation);
+      } catch (error) {
+        console.error(
+          `Failed to process plant "${profile.id}":`,
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }
+
+    // Plan alerts (dedup, suppress, resolve based on stored state)
+    const plan = planAlerts({ now, policy: DEFAULT_ALERT_POLICY, findingsByPlant, previousStates });
+
+    await deliverNotifications(notifier, plan.actions, aiExplanations);
+    await alertStateRepo.replaceForPlants(plantIds, plan.nextStates);
+    await notificationLog.append(plan.actions, now);
+  } finally {
+    await releaseLock(db, RUN_LOCK_ID);
   }
-
-  // Plan alerts (dedup, suppress, resolve based on stored state)
-  const plan = planAlerts({ now, policy: DEFAULT_ALERT_POLICY, findingsByPlant, previousStates });
-
-  await deliverNotifications(notifier, plan.actions);
-  await alertStateRepo.replaceForPlants(plantIds, plan.nextStates);
-  await notificationLog.append(plan.actions, now);
 }
 
 // --- LLM escalation ---
@@ -281,9 +359,19 @@ export default {
     ctx.waitUntil(checkPlants(env));
   },
 
-  // Allow manual trigger via HTTP for testing
+  // Allow manual trigger via HTTP — protected by Cloudflare Access service-token auth.
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
     if (new URL(request.url).pathname === '/run') {
+      const auth = verifyServiceToken(request, env);
+      if (auth === 'disabled') {
+        return new Response(
+          '/run endpoint disabled: RUN_ACCESS_CLIENT_ID and RUN_ACCESS_CLIENT_SECRET not configured',
+          { status: 503 },
+        );
+      }
+      if (auth === 'denied') {
+        return new Response('Forbidden', { status: 403 });
+      }
       await checkPlants(env);
       return new Response('OK', { status: 200 });
     }

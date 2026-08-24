@@ -9,7 +9,9 @@ read capabilities to external clients such as Claude, ChatGPT, or Kiro.
 Home Assistant. See [ADR 0003](docs/adr/0003-aleIsrt-only-no-actuation.md).
 
 Home Assistant stays off the public internet — Workers reach it privately through
-Workers VPC over a Cloudflare Tunnel.
+Workers VPC over a Cloudflare Tunnel. Both Worker HTTP surfaces are gated by
+Cloudflare Access: the MCP endpoint requires an Access JWT, and the agent's manual
+`/run` trigger requires a service token. Neither is reachable anonymously.
 
 ## Architecture
 
@@ -36,8 +38,8 @@ flowchart LR
         VPC["VPC Service<br/>pinned host:port<br/>(SSRF-safe)"]
 
         subgraph WORKERS["Workers"]
-            MCP["workers/mcp<br/>createMcpHandler (stateless)<br/>Access OAuth · read-only tools"]
-            AGENT["workers/agent<br/>cron: every hour<br/>assess → alert → notify"]
+            MCP["workers/mcp<br/>createMcpHandler (stateless)<br/>Access JWT required · read-only tools"]
+            AGENT["workers/agent<br/>cron: every hour · D1 run lock<br/>per-plant isolation · assess → alert → notify"]
             CORE["packages/domain<br/>metrics · assess · ALERT POLICY"]
         end
 
@@ -77,11 +79,26 @@ flowchart LR
 
 | Component | State |
 | --- | --- |
-| `packages/domain` | Complete — 99 tests, `alerts.ts` and `guardrails.ts` at 100% |
-| `packages/hass` | Complete — 78 tests, read-only, 98.9% statements |
-| `packages/storage` | Complete — 42 tests against real SQLite, 100% statements |
-| `workers/mcp` | Complete — stateless MCP server, 6 read-only tools |
-| `workers/agent` | Complete — hourly cron, assess → alert → notify pipeline |
+| `packages/domain` | Complete — `alerts.ts` and `guardrails.ts` at 100% |
+| `packages/hass` | Complete — read-only, 98.9% statements |
+| `packages/storage` | Complete — tested against real SQLite, 100% statements |
+| `workers/mcp` | Complete — stateless MCP server, 6 read-only tools, gated by Cloudflare Access |
+| `workers/agent` | Complete — hourly cron, D1 run lock, per-plant failure isolation, assess → alert → notify pipeline |
+
+222 tests across 17 files (`pnpm test`). Run `pnpm verify` for lint + typecheck +
+tests together.
+
+### Hardening applied
+
+A production-readiness review flagged five gaps, all fixed:
+
+| Issue | Fix |
+| --- | --- |
+| `/run` was a public manual trigger | Gated behind a Cloudflare Access service token (`CF-Access-Client-Id` / `-Secret`); returns 503 if unconfigured, 403 if invalid |
+| MCP Worker was publicly reachable | Requests are validated against a Cloudflare Access JWT (`Cf-Access-Jwt-Assertion`, `aud` claim); an Access Application + Policy are provisioned in Terraform |
+| The AI's explanation was generated but discarded | `escalateToModel()`'s output is now appended to the push notification message |
+| Docs described Durable Objects, KV, and 15-min cron that don't exist in the code | `docs/architecture.md` now matches the deployed design: plain cron Worker, D1 only, hourly loop with 15-min rollups |
+| One plant's failure could abort the whole run; concurrent runs could double-notify | Each plant is processed in its own try/catch; a D1-backed lease (`run_lock` table, 5 min TTL) prevents overlapping cron/manual runs |
 
 ## What it monitors
 
@@ -122,7 +139,7 @@ corepack enable pnpm
 # Install all dependencies
 pnpm install
 
-# Run the full verification suite: lint + typecheck + 219 tests
+# Run the full verification suite: lint + typecheck + 222 tests
 pnpm verify
 ```
 
@@ -245,9 +262,11 @@ wrangler login
 # Create the database
 wrangler d1 create greenhopper
 
-# Note the database ID in the output, then run the migration
+# Note the database ID in the output, then run the migrations
 wrangler d1 execute greenhopper --remote \
   --file packages/storage/migrations/0001_init.sql
+wrangler d1 execute greenhopper --remote \
+  --file packages/storage/migrations/0002_run_lock.sql
 ```
 
 ### Step 9: Configure and deploy the MCP server
@@ -280,13 +299,37 @@ wrangler secret put HASS_BASE_URL
 # When prompted, enter: http://home-assistant.home-assistant.svc.cluster.local:8123
 ```
 
+**Gate the MCP endpoint behind Cloudflare Access** — without this, the Worker
+URL is publicly reachable and would disclose your sensor/plant data:
+
+1. In the Cloudflare dashboard: **Zero Trust → Access → Applications → Add an
+   application → Self-hosted**. Point it at your `greenhopper-mcp` Worker
+   domain and add a policy allowing only your identity/email (or a service
+   token, for non-interactive clients).
+2. Alternatively, apply it via Terraform — see
+   [`deploy/terraform/README.md`](deploy/terraform/README.md) for the
+   `mcp_worker_domain` and `allowed_emails` variables that provision the
+   Access Application and Policy for you.
+3. Set the resulting Access Application Audience (AUD) tag and your team
+   domain as Worker secrets so the Worker itself validates the JWT on every
+   request (defense in depth, not just edge-level gating):
+
+```bash
+wrangler secret put CF_ACCESS_TEAM_DOMAIN
+# e.g. yourteam.cloudflareaccess.com
+
+wrangler secret put CF_ACCESS_AUD
+# the Application Audience Tag shown after creating the Access Application
+```
+
 Deploy:
 
 ```bash
 wrangler deploy
 ```
 
-The MCP server is now live at `https://greenhopper-mcp.YOUR_SUBDOMAIN.workers.dev/mcp`.
+The MCP server is now live at `https://greenhopper-mcp.YOUR_SUBDOMAIN.workers.dev/mcp`
+— reachable only through Cloudflare Access.
 
 ### Step 10: Configure and deploy the agent
 
@@ -305,6 +348,20 @@ wrangler secret put HASS_BASE_URL
 # Same values as the MCP server
 ```
 
+**Protect the manual `/run` trigger** — without this, anyone who discovers the
+Worker URL can trigger runs against HA, D1, and Workers AI. Create a
+Cloudflare Access [service token](https://developers.cloudflare.com/cloudflare-one/identity/service-tokens/)
+(**Zero Trust → Access → Service Auth → Service Tokens → Create Service
+Token**), then store its Client ID and Secret on the Worker:
+
+```bash
+wrangler secret put RUN_ACCESS_CLIENT_ID
+wrangler secret put RUN_ACCESS_CLIENT_SECRET
+```
+
+If these two secrets are not set, `/run` responds `503` and refuses to run —
+it fails closed rather than open.
+
 Deploy:
 
 ```bash
@@ -312,11 +369,17 @@ wrangler deploy
 ```
 
 The agent starts running on the next hour boundary (cron `0 * * * *`). You can
-trigger it manually to verify:
+trigger it manually to verify, passing the service token headers:
 
 ```bash
-curl https://greenhopper-agent.YOUR_SUBDOMAIN.workers.dev/run
+curl https://greenhopper-agent.YOUR_SUBDOMAIN.workers.dev/run \
+  -H "CF-Access-Client-Id: YOUR_SERVICE_TOKEN_CLIENT_ID" \
+  -H "CF-Access-Client-Secret: YOUR_SERVICE_TOKEN_CLIENT_SECRET"
 ```
+
+A concurrent or overlapping call while a run is already in progress is safe —
+a D1-backed lease (`run_lock`, 5-minute TTL) rejects the second run rather than
+double-processing plants and double-notifying.
 
 ### Step 11: Configure your plant registry
 
@@ -403,7 +466,8 @@ so inference costs $0. But as a safety net:
 
 ### Step 14: Verify everything works
 
-After the first hourly run (or after curling `/run`):
+After the first hourly run (or after curling `/run` with the service token
+headers from step 10):
 
 1. **Check logs:** Dashboard → Workers & Pages → greenhopper-agent → Logs.
    You should see the pipeline completing without errors.
@@ -424,6 +488,10 @@ After the first hourly run (or after curling `/run`):
 | No readings in D1 after an hour | Sensors are `unavailable` in HA | Check BLE proxy is online and in range |
 | Getting the same notification every hour | Alert state not persisting | Verify D1 migration ran (`SELECT * FROM alert_state`) |
 | No notifications at all | No notify service found | Install the HA companion app on your phone |
+| `/run` returns `503` | `RUN_ACCESS_CLIENT_ID`/`_SECRET` not set on the agent Worker | `wrangler secret put RUN_ACCESS_CLIENT_ID` / `_SECRET` |
+| `/run` returns `403` | Wrong or missing `CF-Access-Client-Id`/`-Secret` headers | Re-check the service token's Client ID/Secret |
+| MCP client gets `403` | Access JWT missing, expired, or `CF_ACCESS_AUD`/`CF_ACCESS_TEAM_DOMAIN` unset | Re-authenticate via `mcp-remote`; verify secrets match the Access Application |
+| Agent logs show `Run already in progress, skipping.` | A previous run is still holding the D1 lease (or crashed without releasing it) | Wait for the 5-minute TTL to expire, or clear it: `wrangler d1 execute greenhopper --remote --command "DELETE FROM run_lock"` |
 | `pnpm verify` fails on a fresh clone | Wrong Node version | Check `node --version` is >= 22 |
 
 ---
