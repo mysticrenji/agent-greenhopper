@@ -76,9 +76,9 @@ policy without that rule produces a tunnel that never registers, and the failure
 surfaces in the Worker as a generic connection error rather than anything pointing
 at the network.
 
-**Home Assistant needs no Bluetooth access in the pod.** BLE arrives via ESPHome
-ESP32 proxies over the LAN, which is why the HA pod requires no D-Bus mount and no
-`NET_ADMIN`/`NET_RAW`. See [ADR 0005](../../docs/adr/0005-container-deployment-and-ble-proxies.md).
+**Home Assistant uses host Bluetooth through D-Bus.** The privileged HA pod mounts
+the Raspberry Pi host's `/run/dbus` socket read-only and must run on the node with
+the Bluetooth adapter. See [ADR 0006](../../docs/adr/0006-direct-bluetooth-via-dbus.md).
 
 ## Troubleshooting
 

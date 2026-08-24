@@ -37,11 +37,15 @@ export function severityRank(severity: Severity): number {
   return SEVERITY_ORDER[severity];
 }
 
+type SignalScopedSensorFaultCode =
+  | `SENSOR_STALE:${SoilSignal}`
+  | `SENSOR_IMPLAUSIBLE:${SoilSignal}`
+  | `SENSOR_PINNED:${SoilSignal}`;
+
 export type FindingCode =
-  // Sensor health
-  | 'SENSOR_STALE'
-  | 'SENSOR_IMPLAUSIBLE'
-  | 'SENSOR_PINNED'
+  // Sensor health. Sensor faults include the signal so alert state can track
+  // independently failing probes without colliding on (plant_id, code).
+  | SignalScopedSensorFaultCode
   | 'PROBE_UNRESPONSIVE'
   | 'BATTERY_LOW'
   | 'AIR_SENSOR_MISSING'
@@ -140,7 +144,7 @@ export function assess(observation: PlantObservation): Assessment {
   // a pinned or implausible sensor would otherwise generate confident nonsense
   // like "soil is waterlogged" from a reading stuck at 100%.
   const hasCriticalFault = sensorFindings.some(
-    (f) => f.severity === 'critical' && SENSOR_FAULT_CODES.has(f.code),
+    (f) => f.severity === 'critical' && isSensorFaultCode(f.code),
   );
   const conditionFindings = hasCriticalFault ? [] : assessCondition(observation, derived);
   const findings = [...sensorFindings, ...conditionFindings];
@@ -165,17 +169,19 @@ export function assess(observation: PlantObservation): Assessment {
  */
 function shouldEscalate(findings: readonly Finding[], severity: Severity): boolean {
   if (SEVERITY_ORDER[severity] < SEVERITY_ORDER.warn) return false;
-  return findings.some((f) => !SENSOR_FAULT_CODES.has(f.code) && f.severity !== 'info');
+  return findings.some((f) => !isSensorFaultCode(f.code) && f.severity !== 'info');
 }
 
-const SENSOR_FAULT_CODES = new Set<FindingCode>([
-  'SENSOR_STALE',
-  'SENSOR_IMPLAUSIBLE',
-  'SENSOR_PINNED',
-  'PROBE_UNRESPONSIVE',
-  'BATTERY_LOW',
-  'AIR_SENSOR_MISSING',
-]);
+export function isSensorFaultCode(code: FindingCode): boolean {
+  return (
+    code.startsWith('SENSOR_STALE:') ||
+    code.startsWith('SENSOR_IMPLAUSIBLE:') ||
+    code.startsWith('SENSOR_PINNED:') ||
+    code === 'PROBE_UNRESPONSIVE' ||
+    code === 'BATTERY_LOW' ||
+    code === 'AIR_SENSOR_MISSING'
+  );
+}
 
 /** Health checks for one signal's series: presence, freshness, plausibility, pinning. */
 function checkSignalHealth(signal: SoilSignal, series: Series, now: number): Finding[] {
@@ -183,7 +189,7 @@ function checkSignalHealth(signal: SoilSignal, series: Series, now: number): Fin
   if (!current) {
     return [
       {
-        code: 'SENSOR_STALE',
+        code: `SENSOR_STALE:${signal}`,
         severity: 'warn',
         message: `No ${signal} readings available.`,
       },
@@ -194,14 +200,14 @@ function checkSignalHealth(signal: SoilSignal, series: Series, now: number): Fin
 
   if (isStale(current, signal, now)) {
     findings.push({
-      code: 'SENSOR_STALE',
+      code: `SENSOR_STALE:${signal}`,
       severity: 'warn',
       message: `${signal} reading is stale (last seen ${formatAge(now - current.at)} ago).`,
     });
   }
   if (!isPlausible(current.value, signal)) {
     findings.push({
-      code: 'SENSOR_IMPLAUSIBLE',
+      code: `SENSOR_IMPLAUSIBLE:${signal}`,
       severity: 'critical',
       message: `${signal} value ${current.value} is outside the physically possible range.`,
       observed: current.value,
@@ -209,7 +215,7 @@ function checkSignalHealth(signal: SoilSignal, series: Series, now: number): Fin
   }
   if (isPinnedAtRangeLimit(series, signal)) {
     findings.push({
-      code: 'SENSOR_PINNED',
+      code: `SENSOR_PINNED:${signal}`,
       severity: 'critical',
       message: `${signal} has been pinned at its range limit — probe likely corroded.`,
       observed: current.value,

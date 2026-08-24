@@ -9,7 +9,7 @@
  */
 
 import type { PlantProfile, PlantRegistry } from '@greenhopper/domain';
-import { assess, DEFAULT_WATERING_POLICY, derive } from '@greenhopper/domain';
+import { assess, DEFAULT_WATERING_POLICY, derive, isSensorFaultCode } from '@greenhopper/domain';
 import type { HttpFetch, HttpResponse } from '@greenhopper/hass';
 import {
   buildObservation,
@@ -351,15 +351,7 @@ function createServerFactory(env: Env) {
         const observation = buildObservation({ profile, entities, history, now });
         const assessment = assess(observation);
 
-        const sensorCodes = new Set([
-          'SENSOR_STALE',
-          'SENSOR_IMPLAUSIBLE',
-          'SENSOR_PINNED',
-          'PROBE_UNRESPONSIVE',
-          'BATTERY_LOW',
-          'AIR_SENSOR_MISSING',
-        ]);
-        const sensorFindings = assessment.findings.filter((f) => sensorCodes.has(f.code));
+        const sensorFindings = assessment.findings.filter((f) => isSensorFaultCode(f.code));
 
         return textResult(
           JSON.stringify(

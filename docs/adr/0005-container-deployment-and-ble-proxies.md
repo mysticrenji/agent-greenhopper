@@ -1,7 +1,7 @@
 # ADR 0005: Container deployment topology and BLE ingestion via ESPHome proxies
 
 Date: 2026-08-17
-Status: Accepted
+Status: Superseded by [ADR 0006](0006-direct-bluetooth-via-dbus.md)
 
 ## Context
 

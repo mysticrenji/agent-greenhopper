@@ -91,21 +91,50 @@ variable "allowed_emails" {
   description = "Email addresses allowed to access the MCP endpoint via Cloudflare Access"
 }
 
+variable "create_tunnel" {
+  type        = bool
+  description = "Whether Terraform creates the Cloudflare Tunnel; set false to use an existing tunnel"
+  default     = true
+}
+
+variable "existing_tunnel_id" {
+  type        = string
+  description = "Existing Cloudflare Tunnel ID to use when create_tunnel is false"
+  default     = null
+  nullable    = true
+}
+
 # ---------------------------------------------------------------------------
 # Cloudflare Tunnel (remotely-managed)
 # ---------------------------------------------------------------------------
 
 resource "cloudflare_zero_trust_tunnel_cloudflared" "greenhopper" {
+  count = var.create_tunnel ? 1 : 0
+
   account_id = var.account_id
   name       = "greenhopper"
   config_src = "cloudflare"
+}
+
+locals {
+  tunnel_id = var.create_tunnel ? cloudflare_zero_trust_tunnel_cloudflared.greenhopper[0].id : coalesce(
+    var.existing_tunnel_id,
+    "",
+  )
 }
 
 # Kubernetes runs cloudflared with a remotely-managed tunnel token rather than
 # a credentials file, so retrieve the token Cloudflare generates for this tunnel.
 data "cloudflare_zero_trust_tunnel_cloudflared_token" "greenhopper" {
   account_id = var.account_id
-  tunnel_id  = cloudflare_zero_trust_tunnel_cloudflared.greenhopper.id
+  tunnel_id  = local.tunnel_id
+
+  lifecycle {
+    precondition {
+      condition     = var.create_tunnel || local.tunnel_id != ""
+      error_message = "existing_tunnel_id must be set when create_tunnel is false."
+    }
+  }
 }
 
 # ---------------------------------------------------------------------------
@@ -121,7 +150,7 @@ resource "cloudflare_connectivity_directory_service" "home_assistant" {
   host = {
     hostname = var.ha_hostname
     resolver_network = {
-      tunnel_id = cloudflare_zero_trust_tunnel_cloudflared.greenhopper.id
+      tunnel_id = local.tunnel_id
       # resolver_ips omitted: cloudflared uses cluster DNS automatically
     }
   }
@@ -157,26 +186,28 @@ resource "cloudflare_d1_database" "greenhopper" {
 resource "cloudflare_zero_trust_access_application" "mcp" {
   account_id = var.account_id
   name       = "greenhopper-mcp"
-  domain     = var.mcp_worker_domain
   type       = "self_hosted"
 
   session_duration = "24h"
-}
 
-resource "cloudflare_zero_trust_access_policy" "mcp_allow_emails" {
-  account_id     = var.account_id
-  application_id = cloudflare_zero_trust_access_application.mcp.id
-  name           = "Allow configured emails"
-  decision       = "allow"
-  precedence     = 1
+  destinations = [{
+    type = "public"
+    uri  = "https://${var.mcp_worker_domain}/mcp"
+  }]
 
-  include = [
-    {
-      email = {
-        email = var.allowed_emails
+  policies = [{
+    name       = "Allow configured emails"
+    decision   = "allow"
+    precedence = 1
+
+    include = [
+      for allowed_email in var.allowed_emails : {
+        email = {
+          email = allowed_email
+        }
       }
-    }
-  ]
+    ]
+  }]
 }
 
 # ---------------------------------------------------------------------------
@@ -184,7 +215,7 @@ resource "cloudflare_zero_trust_access_policy" "mcp_allow_emails" {
 # ---------------------------------------------------------------------------
 
 output "tunnel_id" {
-  value       = cloudflare_zero_trust_tunnel_cloudflared.greenhopper.id
+  value       = local.tunnel_id
   description = "Tunnel ID — use in the Kubernetes cloudflared deployment"
 }
 

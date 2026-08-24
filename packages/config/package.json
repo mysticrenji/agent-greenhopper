@@ -1,0 +1,28 @@
+{
+  "name": "@greenhopper/config",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Validated deployment configuration for monitored plants and Home Assistant entities.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "main": "./src/index.ts",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "typecheck": "tsc --build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@greenhopper/domain": "workspace:*",
+    "@greenhopper/hass": "workspace:*",
+    "zod": "4.4.3"
+  }
+}

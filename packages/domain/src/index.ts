@@ -26,6 +26,7 @@ export {
   derive,
   type Finding,
   type FindingCode,
+  isSensorFaultCode,
   type PlantObservation,
   type Severity,
   severityRank,

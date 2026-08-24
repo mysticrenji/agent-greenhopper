@@ -18,64 +18,65 @@ Cloudflare Access: the MCP endpoint requires an Access JWT, and the agent's manu
 ## Architecture
 
 ```mermaid
-flowchart LR
-    subgraph HOME["🏠 Home network"]
-        MIFLORA["Mi Flora HHCCJCY01 ×N<br/>moisture · soil temp<br/>lux · fertility (EC) · battery"]
-        RHSENSOR["LYWSD03MMC (per room)<br/>air temp · humidity → VPD"]
-        PROXY["ESPHome ESP32 BLE proxy<br/>active connections required<br/>for battery (ADR 0005)"]
-        HA["HA pod · :8123 read-only<br/>xiaomi_ble · recorder 10d<br/>no D-Bus, no NET_ADMIN"]
-        NOTIFY["notify.mobile_app_*<br/>push to phone"]
-        CFD["cloudflared pod<br/>pinned ≥ 2025.7.0 · QUIC<br/>fixed replicas, no autoscale"]
+flowchart TB
+    subgraph EDGE["🏠 Raspberry Pi · Kubernetes edge cluster"]
+        direction TB
+        MIFLORA["Mi Flora ×N<br/>moisture · soil temp · lux · EC · battery"]
+        ROOM["Room climate sensor × room<br/>air temperature · humidity"]
+        BT["Raspberry Pi Bluetooth adapter<br/>BlueZ · active + passive BLE"]
+        DBUS["System D-Bus<br/>/run/dbus mounted read-only"]
 
-        MIFLORA -. BLE .-> PROXY
-        RHSENSOR -. BLE .-> PROXY
-        PROXY -- "LAN" --> HA
-        HA <-- "cluster DNS<br/>:8123" --> CFD
-        HA --> NOTIFY
+        subgraph PODS["Kubernetes pods"]
+            HA["Home Assistant<br/>privileged · xiaomi_ble · :8123"]
+            TUNNEL["cloudflared<br/>QUIC · fixed replicas"]
+        end
+
+        PHONE["Phone<br/>Home Assistant push notification"]
+
+        MIFLORA -.->|BLE advertisements + battery reads| BT
+        ROOM -.->|BLE| BT
+        BT ==>|host D-Bus| DBUS
+        DBUS ==>|mounted socket| HA
+        HA -->|notify.mobile_app_*| PHONE
+        HA <-->|cluster DNS :8123| TUNNEL
     end
 
-    CFD <== "Cloudflare Tunnel<br/>outbound only · UDP 7844" ==> VPC
+    TUNNEL <-->|outbound-only tunnel / UDP 7844| VPC
 
     subgraph CF["☁️ Cloudflare"]
-        VPC["VPC Service<br/>pinned host:port<br/>(SSRF-safe)"]
-
-        subgraph WORKERS["Workers"]
-            MCP["workers/mcp<br/>createMcpHandler (stateless)<br/>Access JWT required · read-only tools"]
-            AGENT["workers/agent<br/>cron: every hour · D1 run lock<br/>per-plant isolation · assess → alert → notify"]
-            CORE["packages/domain<br/>metrics · assess · ALERT POLICY"]
+        VPC["Workers VPC Service<br/>private, pinned HA host:port"]
+        subgraph WORKERS["Worker control plane"]
+            AGENT["Agent Worker<br/>hourly: assess → alert → notify"]
+            MCP["MCP Worker<br/>stateless · read-only · Access JWT"]
+            DOMAIN["Domain rules<br/>metrics · assessment · alert policy"]
         end
-
-        subgraph STORE["Storage"]
-            D1["D1<br/>15-min rollups<br/>alert state · audit log"]
-        end
-
-        GW["AI Gateway<br/>spend + rate limits"]
+        D1["D1<br/>rollups · alert state · audit log"]
+        AI["AI Gateway → Workers AI<br/>only when rules escalate"]
     end
 
-    LLM["Workers AI<br/>granite-4.0-h-micro"]
-    CLIENTS["Claude · ChatGPT · Kiro<br/>(external MCP clients)"]
+    CLIENTS["MCP clients<br/>Claude · ChatGPT · Kiro"]
 
-    VPC --> CORE
-    MCP --> CORE
-    AGENT --> CORE
-    AGENT --> D1
+    AGENT --> DOMAIN
+    MCP --> DOMAIN
+    AGENT <--> D1
     MCP --> D1
-    AGENT --> GW
-    GW --> LLM
-    AGENT -- "alerts via HA" --> VPC
-    CLIENTS -- "MCP over HTTPS" --> MCP
+    AGENT --> AI
+    AGENT <-->|read sensors / send notifications| VPC
+    CLIENTS -->|MCP over HTTPS| MCP
 
-    classDef home fill:#e8f5e9,stroke:#43a047,color:#1b5e20
-    classDef cloud fill:#e3f2fd,stroke:#1e88e5,color:#0d47a1
-    classDef ext fill:#f3e5f5,stroke:#8e24aa,color:#4a148c
-    class MIFLORA,RHSENSOR,PROXY,HA,NOTIFY,CFD home
-    class VPC,MCP,AGENT,CORE,D1,GW cloud
-    class LLM,CLIENTS ext
+    classDef sensor fill:#ECFDF5,stroke:#10B981,color:#064E3B,stroke-width:2px
+    classDef runtime fill:#FFF7ED,stroke:#F97316,color:#7C2D12,stroke-width:2px
+    classDef cloud fill:#EFF6FF,stroke:#3B82F6,color:#1E3A8A,stroke-width:2px
+    classDef client fill:#FAF5FF,stroke:#A855F7,color:#581C87,stroke-width:2px
+    class MIFLORA,ROOM,BT,DBUS sensor
+    class HA,TUNNEL,PHONE runtime
+    class VPC,AGENT,MCP,DOMAIN,D1,AI cloud
+    class CLIENTS client
 ```
 
-> **Tip:** if you're viewing this on GitHub, the diagram renders automatically.
-> For local viewing, use a Mermaid-compatible editor or see
-> [`docs/architecture.svg`](docs/architecture.svg).
+> **Data path:** BLE never leaves your home network. Workers reach only the
+> Home Assistant API through the private VPC tunnel; the agent never talks to the
+> Bluetooth adapter or D-Bus directly.
 
 ## Status
 
@@ -159,30 +160,27 @@ you're on Node >= 22 (`node --version`).
 > beacons, so Home Assistant will never see the sensor. The agent's `checkSetup()`
 > will detect this automatically once running.
 
-### Step 3: Set up ESPHome Bluetooth proxies
+### Step 3: Give the Home Assistant pod Bluetooth access
 
-Mi Flora data arrives over BLE, but a containerised Home Assistant cannot access
-Bluetooth directly without elevated privileges. ESPHome ESP32 proxies solve this.
+This deployment uses the Raspberry Pi's Bluetooth adapter directly. The host runs
+BlueZ and exposes the system D-Bus socket to the **privileged** Home Assistant pod.
 
-1. **Get an ESP32 board** — the [Olimex ESP32-POE-ISO](https://www.olimex.com/Products/IoT/ESP32/ESP32-POE-ISO/open-source-hardware)
-   is recommended by Home Assistant for best reliability. A generic ESP32-WROOM
-   works too but is Wi-Fi only.
-2. **Flash ESPHome** via https://esphome.io/projects/?type=bluetooth — choose
-   "Bluetooth Proxy" from the ready-made projects.
-3. **Connect to your network** — PoE boards get power and network from one cable;
-   Wi-Fi boards need a USB power source.
-4. **Adopt in Home Assistant** — the proxy will appear automatically under
-   Settings → Devices → ESPHome. Accept it.
-5. **Place near your plants** — BLE range is ~10 metres; walls reduce it
-   significantly. One proxy per room with plants.
+1. Ensure BlueZ is running on the Raspberry Pi and the adapter is visible to it.
+2. Schedule Home Assistant onto that Raspberry Pi node; BLE range is tied to the
+   adapter's physical location.
+3. Mount `/run/dbus` read-only into the Home Assistant pod and run that pod in
+   privileged mode, so the Bluetooth integration can access the host D-Bus.
+4. Restart Home Assistant and confirm the Bluetooth adapter appears under
+   **Settings → System → Network**.
 
-> **Important:** the proxy must be ESP32 running ESPHome, not Shelly or SMLIGHT.
-> Those cannot make active BLE connections, which means Mi Flora battery level
-> would be lost. See [ADR 0005](docs/adr/0005-container-deployment-and-ble-proxies.md).
+> This is a deliberate trade-off: it keeps BLE local and supports Mi Flora's
+> active battery reads, but the privileged HA pod and its node placement are part
+> of the deployment's security and availability boundary. See
+> [ADR 0006](docs/adr/0006-direct-bluetooth-via-dbus.md).
 
 ### Step 4: Verify sensors in Home Assistant
 
-Once proxies are running:
+Once Home Assistant can access the Raspberry Pi Bluetooth adapter:
 
 1. Go to **Settings → Devices & Services → Xiaomi BLE**.
 2. Each Mi Flora should appear automatically. If not, check the proxy is online
@@ -487,7 +485,7 @@ headers from step 10):
 | --- | --- | --- |
 | Agent logs show `HassError: unreachable` | Tunnel not connected, or VPC Service misconfigured | Check `kubectl logs` for cloudflared; verify Service ID |
 | Agent logs show `401` | HASS_TOKEN is wrong or expired | Regenerate the long-lived token in HA |
-| No readings in D1 after an hour | Sensors are `unavailable` in HA | Check BLE proxy is online and in range |
+| No readings in D1 after an hour | Sensors are `unavailable` in HA | Check BlueZ, the D-Bus mount, pod privileges, and BLE range |
 | Getting the same notification every hour | Alert state not persisting | Verify D1 migration ran (`SELECT * FROM alert_state`) |
 | No notifications at all | No notify service found | Install the HA companion app on your phone |
 | `/run` returns `503` | `RUN_ACCESS_CLIENT_ID`/`_SECRET` not set on the agent Worker | `wrangler secret put RUN_ACCESS_CLIENT_ID` / `_SECRET` |
