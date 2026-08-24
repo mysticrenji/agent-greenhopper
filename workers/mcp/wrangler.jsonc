@@ -9,7 +9,7 @@
   "vpc_services": [
     {
       "binding": "HASS",
-      "service_id": "01a01f7c-1dd6-7c03-b705-c489bd12c013",
+      "service_id": "01a03536-1c56-7ef0-b396-7d0c84e0c5ec",
       "remote": true
     }
   ],
