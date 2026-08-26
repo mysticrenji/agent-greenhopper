@@ -83,12 +83,27 @@ variable "ha_port" {
 
 variable "mcp_worker_domain" {
   type        = string
-  description = "Public domain of the MCP worker (e.g. greenhopper-mcp.mysubdomain.workers.dev)"
+  description = "Access-protected custom domain of the MCP worker"
+
+  validation {
+    condition     = !endswith(lower(trimspace(var.mcp_worker_domain)), ".workers.dev")
+    error_message = "mcp_worker_domain must be an Access-protected custom domain, not workers.dev."
+  }
 }
 
 variable "allowed_emails" {
   type        = list(string)
   description = "Email addresses allowed to access the MCP endpoint via Cloudflare Access"
+}
+
+variable "mcp_service_token_id" {
+  type        = string
+  description = "Cloudflare Access service token resource ID allowed to call the MCP endpoint"
+
+  validation {
+    condition     = length(trimspace(var.mcp_service_token_id)) > 0
+    error_message = "mcp_service_token_id must be the non-empty service token resource ID."
+  }
 }
 
 variable "create_tunnel" {
@@ -195,19 +210,32 @@ resource "cloudflare_zero_trust_access_application" "mcp" {
     uri  = "https://${var.mcp_worker_domain}/mcp"
   }]
 
-  policies = [{
-    name       = "Allow configured emails"
-    decision   = "allow"
-    precedence = 1
+  policies = [
+    {
+      name       = "Allow configured emails"
+      decision   = "allow"
+      precedence = 1
 
-    include = [
-      for allowed_email in var.allowed_emails : {
-        email = {
-          email = allowed_email
+      include = [
+        for allowed_email in var.allowed_emails : {
+          email = {
+            email = allowed_email
+          }
         }
-      }
-    ]
-  }]
+      ]
+    },
+    {
+      name       = "Allow MCP service token"
+      decision   = "non_identity"
+      precedence = 2
+
+      include = [{
+        service_token = {
+          token_id = var.mcp_service_token_id
+        }
+      }]
+    },
+  ]
 }
 
 # ---------------------------------------------------------------------------

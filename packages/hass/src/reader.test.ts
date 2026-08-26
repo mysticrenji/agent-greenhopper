@@ -129,3 +129,57 @@ describe('HassReader.history', () => {
     expect(result.has('sensor.a')).toBe(false);
   });
 });
+
+describe('HassReader.historyWithLatest', () => {
+  it('appends a freshly reported unchanged value to compressed history', async () => {
+    const http: HttpFetch = async (url) => {
+      const body = url.endsWith('/api/states')
+        ? [
+            {
+              entity_id: 'sensor.moisture',
+              state: '38',
+              last_reported: '2026-06-15T12:05:00Z',
+              last_updated: '2026-06-15T10:00:00Z',
+            },
+          ]
+        : [
+            [
+              {
+                entity_id: 'sensor.moisture',
+                state: '38',
+                last_updated: '2026-06-15T10:00:00Z',
+              },
+            ],
+          ];
+      return { ok: true, status: 200, json: async () => body, text: async () => '' };
+    };
+
+    const result = await new HassReader(http, CONFIG).historyWithLatest(
+      ['sensor.moisture'],
+      AT_MS - 3 * 3_600_000,
+      AT_MS + 10 * 60_000,
+    );
+
+    expect(result.get('sensor.moisture')).toEqual([
+      { value: 38, at: Date.UTC(2026, 5, 15, 10) },
+      { value: 38, at: Date.UTC(2026, 5, 15, 12, 5) },
+    ]);
+  });
+
+  it('replaces a history sample when the current report has the same timestamp', async () => {
+    const http: HttpFetch = async (url) => {
+      const body = url.endsWith('/api/states')
+        ? [{ entity_id: 'sensor.a', state: '31', last_reported: AT }]
+        : [[{ entity_id: 'sensor.a', state: '30', last_updated: AT }]];
+      return { ok: true, status: 200, json: async () => body, text: async () => '' };
+    };
+
+    const result = await new HassReader(http, CONFIG).historyWithLatest(
+      ['sensor.a'],
+      AT_MS - 3_600_000,
+      AT_MS,
+    );
+
+    expect(result.get('sensor.a')).toEqual([{ value: 31, at: AT_MS }]);
+  });
+});

@@ -74,5 +74,6 @@ export function isPlausible(value: number, signal: Signal): boolean {
 export function isPinnedAtRangeLimit(series: Series, signal: Signal, minSamples = 12): boolean {
   if (series.length < minSamples) return false;
   const [min, max] = PLAUSIBLE_RANGE[signal];
-  return series.every((s) => s.value === min) || series.every((s) => s.value === max);
+  const recent = series.slice(-minSamples);
+  return recent.every((s) => s.value === min) || recent.every((s) => s.value === max);
 }

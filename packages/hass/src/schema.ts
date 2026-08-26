@@ -15,6 +15,7 @@ const ABSENT_STATES = new Set(['unavailable', 'unknown', 'none', '']);
 export const hassStateSchema = z.object({
   entity_id: z.string(),
   state: z.string(),
+  last_reported: z.string().optional(),
   last_updated: z.string().optional(),
   last_changed: z.string().optional(),
 });
@@ -28,6 +29,7 @@ export const hassStatesSchema = z.array(hassStateSchema);
 export const hassHistoryEntrySchema = z.object({
   entity_id: z.string().optional(),
   state: z.string(),
+  last_reported: z.string().optional(),
   last_updated: z.string().optional(),
   last_changed: z.string().optional(),
 });
@@ -55,7 +57,10 @@ export function toSample(entry: HassHistoryEntry): { value: number; at: number }
   const value = Number(entry.state);
   if (!Number.isFinite(value)) return null;
 
-  const timestamp = entry.last_updated ?? entry.last_changed;
+  // Home Assistant advances last_reported even when a sensor reports the same
+  // value. last_updated may remain unchanged, which would make a healthy, stable
+  // probe look stale.
+  const timestamp = entry.last_reported ?? entry.last_updated ?? entry.last_changed;
   if (!timestamp) return null;
 
   const at = Date.parse(timestamp);

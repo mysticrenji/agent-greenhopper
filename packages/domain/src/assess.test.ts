@@ -40,7 +40,10 @@ function fresh(value: number, count = 20, stepMs = MINUTE, endAt = NOW): Series 
  * fixtures must span a realistic day.
  */
 function luxDay(value: number): Series {
-  return fresh(value, 13, HOUR, NOW);
+  return Array.from({ length: 25 }, (_, i) => ({
+    value: i >= 6 && i <= 18 ? value : 0,
+    at: NOW - (24 - i) * HOUR,
+  }));
 }
 
 function observation(overrides: Partial<PlantObservation> = {}): PlantObservation {
@@ -81,6 +84,44 @@ describe('assess — healthy baseline', () => {
     expect(derived.vpd).toBeGreaterThan(0);
     expect(derived.dli).toBeGreaterThan(0);
     expect(derived.conductivityNormalised).toBe(800);
+  });
+
+  it('uses only the latest complete rolling day for DLI', () => {
+    const recent = luxDay(8_000);
+    const olderBrightDay: Series = [
+      { value: 100_000, at: NOW - 48 * HOUR },
+      { value: 100_000, at: NOW - 25 * HOUR },
+    ];
+
+    expect(assess(observation({ lux: [...olderBrightDay, ...recent] })).derived.dli).toBe(
+      assess(observation({ lux: recent })).derived.dli,
+    );
+  });
+
+  it('does not assess DLI from a partial day', () => {
+    const result = assess(observation({ lux: fresh(95, 2, HOUR) }));
+
+    expect(result.derived.dli).toBeNull();
+    expect(codes(result.findings)).not.toContain('DLI_LOW');
+  });
+
+  it('does not assess DLI across an unobserved multi-hour gap', () => {
+    const sparse = [
+      { value: 8_000, at: NOW - 24 * HOUR },
+      { value: 8_000, at: NOW },
+    ];
+    const result = assess(observation({ lux: sparse }));
+
+    expect(result.derived.dli).toBeNull();
+    expect(codes(result.findings)).not.toContain('DLI_HIGH');
+  });
+
+  it('derives zero for a complete dark day but does not trust a pinned lux probe', () => {
+    const result = assess(observation({ lux: luxDay(0) }));
+
+    expect(result.derived.dli).toBe(0);
+    expect(codes(result.findings)).toContain('SENSOR_PINNED:lux');
+    expect(codes(result.findings)).not.toContain('DLI_LOW');
   });
 });
 
@@ -189,6 +230,56 @@ describe('assess — plant condition', () => {
   it('reports insufficient data rather than guessing', () => {
     const result = assess(observation({ moisture: [] }));
     expect(codes(result.findings)).toContain('INSUFFICIENT_DATA');
+  });
+
+  it('suppresses moisture conclusions from a stale probe but still assesses VPD', () => {
+    const result = assess(
+      observation({
+        moisture: fresh(10, 20, MINUTE, NOW - HOUR),
+        humidity: fresh(30),
+      }),
+    );
+
+    expect(codes(result.findings)).toContain('SENSOR_STALE:moisture');
+    expect(codes(result.findings)).not.toContain('MOISTURE_LOW');
+    expect(codes(result.findings)).toContain('VPD_HIGH');
+  });
+
+  it('suppresses DLI conclusions from stale lux but still assesses moisture', () => {
+    const staleLux = luxDay(10).map((sample) => ({ ...sample, at: sample.at - HOUR }));
+    const result = assess(observation({ moisture: fresh(20), lux: staleLux }));
+
+    expect(codes(result.findings)).toContain('SENSOR_STALE:lux');
+    expect(codes(result.findings)).not.toContain('DLI_LOW');
+    expect(codes(result.findings)).toContain('MOISTURE_LOW');
+  });
+
+  it('continues assessing independent signals when moisture is unavailable', () => {
+    const result = assess(observation({ moisture: [], lux: luxDay(10) }));
+
+    expect(codes(result.findings)).toContain('INSUFFICIENT_DATA');
+    expect(codes(result.findings)).toContain('DLI_LOW');
+  });
+
+  it('suppresses VPD from stale room readings but still assesses moisture', () => {
+    const staleAir = fresh(30, 20, MINUTE, NOW - HOUR);
+    const result = assess(
+      observation({ moisture: fresh(20), airTemp: staleAir, humidity: staleAir }),
+    );
+
+    expect(codes(result.findings)).toContain('SENSOR_STALE:airTemp');
+    expect(codes(result.findings)).toContain('SENSOR_STALE:humidity');
+    expect(codes(result.findings)).not.toContain('VPD_HIGH');
+    expect(codes(result.findings)).toContain('MOISTURE_LOW');
+  });
+
+  it('suppresses VPD from implausible humidity but still assesses moisture', () => {
+    const result = assess(observation({ moisture: fresh(20), humidity: fresh(150) }));
+
+    expect(codes(result.findings)).toContain('SENSOR_IMPLAUSIBLE:humidity');
+    expect(codes(result.findings)).not.toContain('VPD_LOW');
+    expect(codes(result.findings)).not.toContain('VPD_HIGH');
+    expect(codes(result.findings)).toContain('MOISTURE_LOW');
   });
 });
 

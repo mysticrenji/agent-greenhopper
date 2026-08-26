@@ -8,3 +8,13 @@ account_id = "your-cloudflare-account-id"
 # In-cluster hostname of Home Assistant, as cloudflared would resolve it.
 ha_hostname = "home-assistant.home-assistant.svc.cluster.local"
 ha_port     = 8123
+
+allowed_emails    = ["you@example.com"]
+mcp_worker_domain = "agent-greenhopper.example.com"
+
+# Zero Trust > Access > Service Auth > Service Tokens > select the token and
+# copy its resource ID. This is not the Client ID ending in `.access`.
+mcp_service_token_id = "your-service-token-resource-id"
+
+create_tunnel      = true
+existing_tunnel_id = null

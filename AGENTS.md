@@ -5,7 +5,7 @@ same change as any structural decision, new package, new dependency, or altered
 convention.** It is the fastest path to understanding this repository; if it goes
 stale it becomes a liability.
 
-Last updated: 2026-08-22 · Status: foundation + domain layer complete (alert-only)
+Last updated: 2026-08-25 · Status: foundation + domain layer complete (alert-only)
 
 ---
 
@@ -35,7 +35,7 @@ threshold, so the domain layer converts them first:
 | --- | --- | --- |
 | Soil moisture | Mi Flora | dry-down slope (%/day), time-to-threshold |
 | Soil temperature | Mi Flora | rolling min/max |
-| Sunlight (lux) | Mi Flora | DLI, integrated over the photoperiod |
+| Sunlight (lux) | Mi Flora | DLI, integrated over the latest complete rolling 24h |
 | Fertility (EC) | Mi Flora | value normalised to a reference moisture |
 | Air temp + humidity | **separate room sensor** | VPD |
 
@@ -52,7 +52,8 @@ packages/storage/    D1 schema, migrations, repositories. Tested against real SQ
 workers/mcp/         Remote MCP server (createMcpHandler, SDK v2, stateless).
 workers/agent/       Scheduled cron Worker: assess → alert → notify pipeline.
 deploy/kubernetes/   cloudflared Deployment + NetworkPolicy for Workers VPC.
-deploy/terraform/    IaC: Tunnel, VPC Service, D1, R2 state bucket. State in R2.
+deploy/terraform/    IaC: Tunnel, VPC Service, D1, MCP Access policies, R2 state bucket.
+                     State in R2.
 docs/                Architecture, ADRs, diagrams.
 ```
 
@@ -72,13 +73,13 @@ docs/                Architecture, ADRs, diagrams.
 | Module | Responsibility |
 | --- | --- |
 | `transport.ts` | Minimal structural `HttpFetch` — no DOM or Workers types. Throws `HassError` |
-| `schema.ts` | zod schemas for HA REST; `toSample` handles `unavailable`/`unknown` |
+| `schema.ts` | zod schemas for HA REST; freshness uses `last_reported`, then update/change time |
 | `entities.ts` | Mi Flora + climate-sensor entity ID mapping, registry schema; battery is optional when HA does not expose it |
-| `reader.ts` | `HassReader`: states, latest samples, history. **No `callService`** |
+| `reader.ts` | `HassReader`: states, latest samples, history merged with current reports. **No `callService`** |
 | `notifier.ts` | `HassNotifier`: `notify.*` only, service name validated against escape |
 | `services.ts` | Discovers available `notify.*` targets; resolves one with a documented preference order |
 | `diagnostics.ts` | `checkSetup`: proves entity IDs, firmware adequacy and VPD availability empirically |
-| `observations.ts` | Builds the domain `PlantObservation`; EC/moisture pairing; watering inference |
+| `observations.ts` | Builds observations; raw current readout; EC/moisture pairing; watering inference |
 
 ### packages/storage modules
 
@@ -99,6 +100,11 @@ fails the suite rather than production. Reach the adapter through
 ### Schema notes worth knowing before editing
 
 - Timestamps are **unix milliseconds** everywhere, matching the domain exactly.
+- Current freshness comes from HA `last_reported`, because `last_updated` does not advance when an
+  integration reports an unchanged value. Trend history is merged with that current state before
+  assessment; the history endpoint may compress unchanged readings.
+- DLI always means the latest complete rolling 24-hour window. Less than 23 hours of coverage
+  or a gap of more than two hours produces `null`, not a misleading low-light warning.
 - `readings` is deliberately **wide** (a column per signal) rather than narrow.
   D1 bills rows read and written; the narrow shape would multiply both by seven
   for a fixed set of signals. Air temp and humidity are duplicated across plants
@@ -181,6 +187,7 @@ in a dedicated commit.
 | Biome | 2.5.8 | lint + format in one tool |
 | Vitest | 4.1.10 | |
 | zod | 4.4.3 | only runtime dependency of the domain layer |
+| jose | 6.2.9 | MCP Worker validation of Cloudflare Access JWT signatures and claims |
 
 ## 7. Coding standards
 

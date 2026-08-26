@@ -34,6 +34,9 @@ export { assertNotifyService, HassNotifier, type Notification } from './notifier
 
 export {
   buildObservation,
+  type CurrentReading,
+  type CurrentReadings,
+  currentReadings,
   inferLastWatering,
   type ObservationSources,
   pairConductivityWithMoisture,

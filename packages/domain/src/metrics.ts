@@ -113,6 +113,7 @@ export function dailyLightIntegral(lux: Series, luxToPpfd = DAYLIGHT_LUX_TO_PPFD
   if (lux.length < 2) return null;
 
   let micromoles = 0;
+  let hasMeasuredInterval = false;
   for (let i = 1; i < lux.length; i += 1) {
     const previous = lux[i - 1];
     const current = lux[i];
@@ -121,11 +122,12 @@ export function dailyLightIntegral(lux: Series, luxToPpfd = DAYLIGHT_LUX_TO_PPFD
     const seconds = (current.at - previous.at) / MS_PER_SECOND;
     if (seconds <= 0) continue;
 
+    hasMeasuredInterval = true;
     const meanPpfd = ((previous.value + current.value) / 2) * luxToPpfd;
     micromoles += meanPpfd * seconds;
   }
 
-  return micromoles === 0 ? null : round(micromoles / 1_000_000, 3);
+  return hasMeasuredInterval ? round(micromoles / 1_000_000, 3) : null;
 }
 
 export interface ConductivityReading {

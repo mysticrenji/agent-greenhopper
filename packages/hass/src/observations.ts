@@ -11,6 +11,7 @@ import type {
   PlantProfile,
   Series,
 } from '@greenhopper/domain';
+import { latest } from '@greenhopper/domain';
 import type { PlantEntities } from './entities.js';
 
 export interface ObservationSources {
@@ -28,6 +29,25 @@ const PAIRING_TOLERANCE_MS = 5 * 60_000;
 
 /** A moisture rise of at least this many points implies the plant was watered. */
 const WATERING_RISE_PCT = 8;
+
+type ReadingUnit = '%' | 'C' | 'lx' | 'uS/cm';
+
+export interface CurrentReading<Unit extends ReadingUnit> {
+  readonly value: number;
+  readonly unit: Unit;
+  readonly observedAt: number;
+  readonly ageMinutes: number;
+}
+
+export interface CurrentReadings {
+  readonly moisture: CurrentReading<'%'> | null;
+  readonly soilTemperature: CurrentReading<'C'> | null;
+  readonly illuminance: CurrentReading<'lx'> | null;
+  readonly conductivity: CurrentReading<'uS/cm'> | null;
+  readonly battery: CurrentReading<'%'> | null;
+  readonly airTemperature: CurrentReading<'C'> | null;
+  readonly humidity: CurrentReading<'%'> | null;
+}
 
 export function buildObservation(sources: ObservationSources): PlantObservation {
   const { entities, history, profile, now } = sources;
@@ -51,6 +71,34 @@ export function buildObservation(sources: ObservationSources): PlantObservation 
   };
 }
 
+/** Raw latest values, kept separate from derived metrics so app readings remain comparable. */
+export function currentReadings(observation: PlantObservation): CurrentReadings {
+  return {
+    moisture: currentReading(observation.moisture, '%', observation.now),
+    soilTemperature: currentReading(observation.soilTemp, 'C', observation.now),
+    illuminance: currentReading(observation.lux, 'lx', observation.now),
+    conductivity: currentReading(observation.conductivity, 'uS/cm', observation.now),
+    battery: currentReading(observation.battery ?? EMPTY, '%', observation.now),
+    airTemperature: currentReading(observation.airTemp, 'C', observation.now),
+    humidity: currentReading(observation.humidity, '%', observation.now),
+  };
+}
+
+function currentReading<Unit extends ReadingUnit>(
+  series: Series,
+  unit: Unit,
+  now: number,
+): CurrentReading<Unit> | null {
+  const sample = latest(series);
+  if (!sample) return null;
+  return {
+    value: sample.value,
+    unit,
+    observedAt: sample.at,
+    ageMinutes: Math.max(0, Math.round((now - sample.at) / 60_000)),
+  };
+}
+
 /**
  * Pair each conductivity reading with the moisture reading taken closest in time.
  *
@@ -68,29 +116,21 @@ export function pairConductivityWithMoisture(
   if (moisture.length === 0) return [];
 
   const paired: ConductivityReading[] = [];
+  let moistureIndex = 0;
 
   for (const ec of conductivity) {
-    const nearest = nearestSample(moisture, ec.at);
+    while (moistureIndex + 1 < moisture.length) {
+      const current = moisture[moistureIndex];
+      const next = moisture[moistureIndex + 1];
+      if (!current || !next || Math.abs(next.at - ec.at) >= Math.abs(current.at - ec.at)) break;
+      moistureIndex += 1;
+    }
+    const nearest = moisture[moistureIndex];
     if (!nearest || Math.abs(nearest.at - ec.at) > toleranceMs) continue;
     paired.push({ conductivity: ec.value, moisture: nearest.value, at: ec.at });
   }
 
   return paired;
-}
-
-function nearestSample(series: Series, at: number): { value: number; at: number } | null {
-  let best: { value: number; at: number } | null = null;
-  let bestDistance = Number.POSITIVE_INFINITY;
-
-  for (const sample of series) {
-    const distance = Math.abs(sample.at - at);
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      best = sample;
-    }
-  }
-
-  return best;
 }
 
 /**

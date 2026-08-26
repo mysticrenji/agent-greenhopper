@@ -111,8 +111,8 @@ describe('dailyLightIntegral', () => {
     expect(doubled).toBeCloseTo(base * 2, 3);
   });
 
-  it('returns null for darkness and for too few samples', () => {
-    expect(dailyLightIntegral(series([0, 0, 0]))).toBeNull();
+  it('returns zero for measured darkness and null for too few samples', () => {
+    expect(dailyLightIntegral(series([0, 0, 0]))).toBe(0);
     expect(dailyLightIntegral(series([500]))).toBeNull();
   });
 
