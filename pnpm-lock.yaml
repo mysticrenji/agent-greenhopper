@@ -96,6 +96,9 @@ importers:
       agents:
         specifier: 0.0.97
         version: 0.0.97(@cloudflare/workers-types@4.20250617.0)(react@19.2.8)
+      jose:
+        specifier: 6.2.9
+        version: 6.2.9
       zod:
         specifier: 4.4.3
         version: 4.4.3

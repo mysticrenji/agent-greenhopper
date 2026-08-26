@@ -4,6 +4,14 @@
   "main": "src/index.ts",
   "compatibility_date": "2025-07-01",
   "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    {
+      "pattern": "agent-greenhopper.geekfarmer.dev",
+      "custom_domain": true
+    }
+  ],
   // VPC Service binding to reach Home Assistant privately through the tunnel.
   // Replace the service_id with your real VPC Service ID after creating it.
   "vpc_services": [

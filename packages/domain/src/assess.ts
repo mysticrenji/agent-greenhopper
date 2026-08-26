@@ -20,8 +20,8 @@ import {
   vapourPressureDeficit,
 } from './metrics.js';
 import type { PlantProfile } from './plant.js';
-import type { Series, SoilSignal } from './signals.js';
-import { isPinnedAtRangeLimit, isPlausible, isStale } from './signals.js';
+import type { Series, Signal, SoilSignal } from './signals.js';
+import { isPinnedAtRangeLimit, isPlausible, isStale, SIGNALS } from './signals.js';
 
 export type Severity = 'ok' | 'info' | 'warn' | 'critical';
 
@@ -38,8 +38,8 @@ export function severityRank(severity: Severity): number {
 }
 
 type SignalScopedSensorFaultCode =
-  | `SENSOR_STALE:${SoilSignal}`
-  | `SENSOR_IMPLAUSIBLE:${SoilSignal}`
+  | `SENSOR_STALE:${Signal}`
+  | `SENSOR_IMPLAUSIBLE:${Signal}`
   | `SENSOR_PINNED:${SoilSignal}`;
 
 export type FindingCode =
@@ -111,6 +111,10 @@ export interface Assessment {
 const PROBE_RESPONSE_THRESHOLD = 5;
 const PROBE_RESPONSE_WINDOW_MS = 30 * 60_000;
 const BATTERY_LOW_PCT = 15;
+const DLI_WINDOW_MS = 24 * 60 * 60_000;
+// A one-hour tolerance accommodates reporting jitter without treating a partial day as a DLI.
+const DLI_MIN_COVERAGE_MS = 23 * 60 * 60_000;
+const DLI_MAX_GAP_MS = 2 * 60 * 60_000;
 
 export function derive(observation: PlantObservation): Derived {
   const referenceMoisture =
@@ -121,12 +125,29 @@ export function derive(observation: PlantObservation): Derived {
     dryRatePerDay: dryDownRate(observation.moisture),
     soilTemp: latest(observation.soilTemp)?.value ?? null,
     vpd: deriveVpd(observation),
-    dli: dailyLightIntegral(observation.lux),
+    dli: deriveDli(observation.lux, observation.now),
     conductivityNormalised: conductivityAtMoisture(
       observation.pairedConductivity,
       referenceMoisture,
     ),
   };
+}
+
+function deriveDli(lux: Series, now: number): number | null {
+  const windowStart = now - DLI_WINDOW_MS;
+  const rollingDay = lux.filter((sample) => sample.at >= windowStart && sample.at <= now);
+  const first = rollingDay[0];
+  const last = latest(rollingDay);
+  if (!first || !last || last.at - first.at < DLI_MIN_COVERAGE_MS) return null;
+  if (
+    rollingDay.some((sample, index) => {
+      const previous = rollingDay[index - 1];
+      return previous ? sample.at - previous.at > DLI_MAX_GAP_MS : false;
+    })
+  ) {
+    return null;
+  }
+  return dailyLightIntegral(rollingDay);
 }
 
 function deriveVpd(observation: PlantObservation): number | null {
@@ -139,14 +160,12 @@ function deriveVpd(observation: PlantObservation): number | null {
 export function assess(observation: PlantObservation): Assessment {
   const derived = derive(observation);
   const sensorFindings = assessSensors(observation);
-
-  // Do not reason about plant health from a probe already known to be broken —
-  // a pinned or implausible sensor would otherwise generate confident nonsense
-  // like "soil is waterlogged" from a reading stuck at 100%.
-  const hasCriticalFault = sensorFindings.some(
-    (f) => f.severity === 'critical' && isSensorFaultCode(f.code),
-  );
-  const conditionFindings = hasCriticalFault ? [] : assessCondition(observation, derived);
+  const unusableSignals = sensorFindings.reduce<Set<Signal>>((signals, finding) => {
+    const signal = signalFromSensorFault(finding.code);
+    if (signal) signals.add(signal);
+    return signals;
+  }, new Set());
+  const conditionFindings = assessCondition(observation, derived, unusableSignals);
   const findings = [...sensorFindings, ...conditionFindings];
 
   const severity = findings.reduce<Severity>(
@@ -163,6 +182,12 @@ export function assess(observation: PlantObservation): Assessment {
   };
 }
 
+function signalFromSensorFault(code: FindingCode): Signal | null {
+  if (code === 'PROBE_UNRESPONSIVE') return 'moisture';
+  if (!isSignalScopedSensorFaultCode(code)) return null;
+  return SIGNALS.find((signal) => code.endsWith(`:${signal}`)) ?? null;
+}
+
 /**
  * Escalate only when the rules found something actionable but not when the cause
  * is a broken sensor — a dead probe needs a new battery, not an LLM.
@@ -174,17 +199,28 @@ function shouldEscalate(findings: readonly Finding[], severity: Severity): boole
 
 export function isSensorFaultCode(code: FindingCode): boolean {
   return (
-    code.startsWith('SENSOR_STALE:') ||
-    code.startsWith('SENSOR_IMPLAUSIBLE:') ||
-    code.startsWith('SENSOR_PINNED:') ||
+    isSignalScopedSensorFaultCode(code) ||
     code === 'PROBE_UNRESPONSIVE' ||
     code === 'BATTERY_LOW' ||
     code === 'AIR_SENSOR_MISSING'
   );
 }
 
+function isSignalScopedSensorFaultCode(code: FindingCode): code is SignalScopedSensorFaultCode {
+  return (
+    code.startsWith('SENSOR_STALE:') ||
+    code.startsWith('SENSOR_IMPLAUSIBLE:') ||
+    code.startsWith('SENSOR_PINNED:')
+  );
+}
+
 /** Health checks for one signal's series: presence, freshness, plausibility, pinning. */
-function checkSignalHealth(signal: SoilSignal, series: Series, now: number): Finding[] {
+function checkSignalHealth(
+  signal: Signal,
+  series: Series,
+  now: number,
+  pinnedSignal: SoilSignal | null = null,
+): Finding[] {
   const current = latest(series);
   if (!current) {
     return [
@@ -213,9 +249,9 @@ function checkSignalHealth(signal: SoilSignal, series: Series, now: number): Fin
       observed: current.value,
     });
   }
-  if (isPinnedAtRangeLimit(series, signal)) {
+  if (pinnedSignal && isPinnedAtRangeLimit(series, pinnedSignal)) {
     findings.push({
-      code: `SENSOR_PINNED:${signal}`,
+      code: `SENSOR_PINNED:${pinnedSignal}`,
       severity: 'critical',
       message: `${signal} has been pinned at its range limit — probe likely corroded.`,
       observed: current.value,
@@ -266,11 +302,22 @@ function assessSensors(observation: PlantObservation): Finding[] {
     : [];
 
   return [
-    ...soilSeries.flatMap(([signal, series]) => checkSignalHealth(signal, series, observation.now)),
+    ...soilSeries.flatMap(([signal, series]) =>
+      checkSignalHealth(signal, series, observation.now, signal),
+    ),
+    ...assessAirSensors(observation),
     ...batteryFindings,
     ...checkBattery(observation.battery),
     ...checkAirSensor(observation),
     ...probeFailedToRespond(observation),
+  ];
+}
+
+function assessAirSensors(observation: PlantObservation): Finding[] {
+  if (!latest(observation.airTemp) || !latest(observation.humidity)) return [];
+  return [
+    ...checkSignalHealth('airTemp', observation.airTemp, observation.now),
+    ...checkSignalHealth('humidity', observation.humidity, observation.now),
   ];
 }
 
@@ -306,35 +353,93 @@ function probeFailedToRespond(observation: PlantObservation): Finding[] {
   ];
 }
 
-function assessCondition(observation: PlantObservation, derived: Derived): Finding[] {
-  const findings: Finding[] = [];
+function assessCondition(
+  observation: PlantObservation,
+  derived: Derived,
+  unusableSignals: ReadonlySet<Signal>,
+): Finding[] {
   const { targets } = observation.profile;
+  const findings = assessMoisture(derived, targets.moisture, !unusableSignals.has('moisture'));
 
-  if (derived.moisture === null) {
-    findings.push({
-      code: 'INSUFFICIENT_DATA',
-      severity: 'info',
-      message: 'No moisture data, so plant condition cannot be assessed.',
-    });
-    return findings;
+  if (!unusableSignals.has('soilTemp')) {
+    findings.push(
+      ...rangeFinding(
+        'SOIL_TEMP_LOW',
+        'SOIL_TEMP_HIGH',
+        'Soil temperature',
+        'C',
+        derived.soilTemp,
+        targets.soilTemp,
+      ),
+    );
+  }
+  if (!unusableSignals.has('airTemp') && !unusableSignals.has('humidity')) {
+    findings.push(...rangeFinding('VPD_LOW', 'VPD_HIGH', 'VPD', 'kPa', derived.vpd, targets.vpd));
+  }
+  if (!unusableSignals.has('lux')) {
+    findings.push(
+      ...rangeFinding(
+        'DLI_LOW',
+        'DLI_HIGH',
+        'Daily light integral',
+        'mol/m2/day',
+        derived.dli,
+        targets.dli,
+      ),
+    );
+  }
+  if (!unusableSignals.has('moisture') && !unusableSignals.has('conductivity')) {
+    findings.push(
+      ...rangeFinding(
+        'EC_LOW',
+        'EC_HIGH',
+        'Fertility (EC)',
+        'uS/cm',
+        derived.conductivityNormalised,
+        targets.conductivity,
+      ),
+    );
   }
 
-  if (derived.moisture < targets.moisture.min) {
-    findings.push({
-      code: 'MOISTURE_LOW',
-      severity: derived.moisture < targets.moisture.min / 2 ? 'critical' : 'warn',
-      message: `Soil moisture ${derived.moisture}% is below the target minimum.`,
-      observed: derived.moisture,
-      expected: `>= ${targets.moisture.min}%`,
-    });
-  } else if (derived.moisture > targets.moisture.max) {
-    findings.push({
-      code: 'MOISTURE_HIGH',
-      severity: 'warn',
-      message: `Soil moisture ${derived.moisture}% is above the target maximum.`,
-      observed: derived.moisture,
-      expected: `<= ${targets.moisture.max}%`,
-    });
+  return findings;
+}
+
+function assessMoisture(
+  derived: Derived,
+  target: { min: number; max: number },
+  usable: boolean,
+): Finding[] {
+  if (derived.moisture === null) {
+    return [
+      {
+        code: 'INSUFFICIENT_DATA',
+        severity: 'info',
+        message: 'No moisture data, so plant condition cannot be assessed.',
+      },
+    ];
+  }
+  if (!usable) return [];
+  if (derived.moisture < target.min) {
+    return [
+      {
+        code: 'MOISTURE_LOW',
+        severity: derived.moisture < target.min / 2 ? 'critical' : 'warn',
+        message: `Soil moisture ${derived.moisture}% is below the target minimum.`,
+        observed: derived.moisture,
+        expected: `>= ${target.min}%`,
+      },
+    ];
+  }
+  if (derived.moisture > target.max) {
+    const findings: Finding[] = [
+      {
+        code: 'MOISTURE_HIGH',
+        severity: 'warn',
+        message: `Soil moisture ${derived.moisture}% is above the target maximum.`,
+        observed: derived.moisture,
+        expected: `<= ${target.max}%`,
+      },
+    ];
 
     // Saturated soil that is not drying points at drainage, not watering habits.
     if (derived.dryRatePerDay !== null && Math.abs(derived.dryRatePerDay) < 0.5) {
@@ -345,41 +450,9 @@ function assessCondition(observation: PlantObservation, derived: Derived): Findi
         observed: derived.dryRatePerDay,
       });
     }
+    return findings;
   }
-
-  findings.push(
-    ...rangeFinding(
-      'SOIL_TEMP_LOW',
-      'SOIL_TEMP_HIGH',
-      'Soil temperature',
-      'C',
-      derived.soilTemp,
-      targets.soilTemp,
-    ),
-  );
-  findings.push(...rangeFinding('VPD_LOW', 'VPD_HIGH', 'VPD', 'kPa', derived.vpd, targets.vpd));
-  findings.push(
-    ...rangeFinding(
-      'DLI_LOW',
-      'DLI_HIGH',
-      'Daily light integral',
-      'mol/m2/day',
-      derived.dli,
-      targets.dli,
-    ),
-  );
-  findings.push(
-    ...rangeFinding(
-      'EC_LOW',
-      'EC_HIGH',
-      'Fertility (EC)',
-      'uS/cm',
-      derived.conductivityNormalised,
-      targets.conductivity,
-    ),
-  );
-
-  return findings;
+  return [];
 }
 
 function rangeFinding(

@@ -218,9 +218,10 @@ projected time-to-dry, not current %.
 
 **Light** — instantaneous lux is nearly meaningless for plant health because it
 swings orders of magnitude as clouds pass. What a plant responds to is the
-total daily photon dose. Integrate lux over the day into a DLI estimate and
-compare day-over-day. A week of low DLI explains leggy growth; one dark
-afternoon explains nothing.
+total daily photon dose. Integrate lux over the latest complete rolling 24-hour
+window into a DLI estimate and compare day-over-day. With less than 23 hours of
+coverage, report no DLI instead of a false low-light warning. A week of low DLI
+explains leggy growth; one dark afternoon explains nothing.
 
 **Temp + humidity → VPD** — vapour pressure deficit is the actual driver of
 transpiration, and it is a function of both. 25 °C at 40% RH and 25 °C at 80%

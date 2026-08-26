@@ -159,7 +159,7 @@ async function processPlant(
   const ids = entityIdsOf(entities);
   const windowStart = ctx.now - HISTORY_WINDOW_MS;
 
-  const history = await ctx.reader.history(ids, windowStart, ctx.now);
+  const history = await ctx.reader.historyWithLatest(ids, windowStart, ctx.now);
 
   // Roll up into D1 for long-term retention
   const signalMap: Partial<Record<StorableSignal, readonly { value: number; at: number }[]>> = {};
@@ -311,12 +311,24 @@ async function checkPlants(env: Env): Promise<void> {
     const previousStates = await alertStateRepo.loadForPlants(plantIds);
     const plantCtx: PlantContext = { reader, readingsRepo, now };
     const { findingsByPlant, aiExplanations } = await collectPlantFindings(env, plantCtx);
+    const completedPlantIds = [...findingsByPlant.keys()];
+    const completedPlantIdSet = new Set(completedPlantIds);
+    const completedPreviousStates = previousStates.filter((state) =>
+      completedPlantIdSet.has(state.plantId),
+    );
 
     // Plan alerts (dedup, suppress, resolve based on stored state)
-    const plan = planAlerts({ now, policy: DEFAULT_ALERT_POLICY, findingsByPlant, previousStates });
+    // A failed HA refresh is unknown state, not recovery. Scope both planning and
+    // persistence to completed plants so their existing alerts remain intact.
+    const plan = planAlerts({
+      now,
+      policy: DEFAULT_ALERT_POLICY,
+      findingsByPlant,
+      previousStates: completedPreviousStates,
+    });
 
     await deliverNotifications(notifier, plan.actions, aiExplanations);
-    await alertStateRepo.replaceForPlants(plantIds, plan.nextStates);
+    await alertStateRepo.replaceForPlants(completedPlantIds, plan.nextStates);
     await notificationLog.append(plan.actions, now);
   } finally {
     await releaseLock(db, RUN_LOCK_ID);

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { miFloraEntities } from './entities.js';
 import {
   buildObservation,
+  currentReadings,
   inferLastWatering,
   pairConductivityWithMoisture,
 } from './observations.js';
@@ -61,6 +62,18 @@ describe('pairConductivityWithMoisture', () => {
 
     expect(pairConductivityWithMoisture(conductivity, moisture)).toEqual([]);
     expect(pairConductivityWithMoisture(conductivity, moisture, 15 * MINUTE)).toHaveLength(1);
+  });
+
+  it('keeps the earlier moisture sample when two are equally near', () => {
+    const conductivity = [{ value: 800, at: T0 + 5 * MINUTE }];
+    const moisture = [
+      { value: 30, at: T0 },
+      { value: 40, at: T0 + 10 * MINUTE },
+    ];
+
+    expect(pairConductivityWithMoisture(conductivity, moisture)).toEqual([
+      { conductivity: 800, moisture: 30, at: T0 + 5 * MINUTE },
+    ]);
   });
 
   it('returns nothing when moisture is unavailable', () => {
@@ -175,5 +188,55 @@ describe('buildObservation', () => {
     });
 
     expect(observation.lastWateredAt).toBe(T0 + 2 * HOUR);
+  });
+});
+
+describe('currentReadings', () => {
+  it('exposes the latest raw values with units and freshness for app comparison', () => {
+    const now = T0 + 3 * HOUR;
+    const currentHistory = new Map<string, Series>([
+      [ENTITIES.moisture, series([35, 34, 33])],
+      [ENTITIES.soilTemp, series([21, 21, 21])],
+      [ENTITIES.lux, series([0, 8_000, 0])],
+      [ENTITIES.conductivity, series([800, 810, 790])],
+      [ENTITIES.battery, [{ value: 85, at: T0 }]],
+      [ENTITIES.airTemp, series([22, 22, 22])],
+      [ENTITIES.humidity, series([55, 55, 55])],
+    ]);
+    const observation = buildObservation({
+      profile: PROFILE,
+      entities: ENTITIES,
+      history: currentHistory,
+      now,
+    });
+
+    expect(currentReadings(observation)).toMatchObject({
+      moisture: { value: 33, unit: '%', observedAt: T0 + 2 * HOUR, ageMinutes: 60 },
+      soilTemperature: { value: 21, unit: 'C' },
+      illuminance: { value: 0, unit: 'lx' },
+      conductivity: { value: 790, unit: 'uS/cm' },
+      battery: { value: 85, unit: '%', observedAt: T0, ageMinutes: 180 },
+      airTemperature: { value: 22, unit: 'C' },
+      humidity: { value: 55, unit: '%' },
+    });
+  });
+
+  it('uses null for unavailable raw readings', () => {
+    const observation = buildObservation({
+      profile: PROFILE,
+      entities: { ...ENTITIES, battery: undefined },
+      history: new Map(),
+      now: T0,
+    });
+
+    expect(currentReadings(observation)).toEqual({
+      moisture: null,
+      soilTemperature: null,
+      illuminance: null,
+      conductivity: null,
+      battery: null,
+      airTemperature: null,
+      humidity: null,
+    });
   });
 });

@@ -62,4 +62,13 @@ describe('isPinnedAtRangeLimit', () => {
   it('requires a minimum sample count so brief gaps do not trigger it', () => {
     expect(isPinnedAtRangeLimit(pinned(0, 3), 'moisture')).toBe(false);
   });
+
+  it('detects a recent pinned run after older healthy readings', () => {
+    const series: Series = [
+      { value: 35, at: NOW - 13 * MINUTE },
+      ...Array.from({ length: 12 }, (_, i) => ({ value: 0, at: NOW - (11 - i) * MINUTE })),
+    ];
+
+    expect(isPinnedAtRangeLimit(series, 'moisture')).toBe(true);
+  });
 });

@@ -8,7 +8,7 @@
  * egress and live in `notifier.ts` as a single narrowly-typed operation.
  */
 
-import type { Series } from '@greenhopper/domain';
+import type { Sample, Series } from '@greenhopper/domain';
 import {
   type HassHistoryEntry,
   type HassState,
@@ -38,11 +38,9 @@ export class HassReader {
    * treat a missing signal as a staleness finding rather than an error, which is
    * what `assess()` already does.
    */
-  async latestSamples(
-    entityIds: readonly string[],
-  ): Promise<Map<string, { value: number; at: number }>> {
+  async latestSamples(entityIds: readonly string[]): Promise<Map<string, Sample>> {
     const states = await this.states();
-    const samples = new Map<string, { value: number; at: number }>();
+    const samples = new Map<string, Sample>();
 
     for (const id of entityIds) {
       const state = states.get(id);
@@ -86,6 +84,57 @@ export class HassReader {
 
     return collectSeries(parsed, entityIds);
   }
+
+  /**
+   * Historical series with the current state appended per entity.
+   *
+   * Recorder history is intentionally compressed and can omit repeated sensor
+   * reports whose value did not change. The state endpoint carries
+   * `last_reported`, so merging it prevents stable readings from looking stale.
+   */
+  async historyWithLatest(
+    entityIds: readonly string[],
+    startMs: number,
+    endMs: number,
+  ): Promise<Map<string, Series>> {
+    const [history, current] = await Promise.all([
+      this.history(entityIds, startMs, endMs),
+      this.latestSamples(entityIds),
+    ]);
+    return mergeLatestSamples(history, current, entityIds);
+  }
+}
+
+function mergeLatestSamples(
+  history: ReadonlyMap<string, Series>,
+  current: ReadonlyMap<string, Sample>,
+  entityIds: readonly string[],
+): Map<string, Series> {
+  const merged = new Map<string, Series>();
+
+  for (const entityId of entityIds) {
+    const series = history.get(entityId) ?? [];
+    const latest = current.get(entityId);
+    if (!latest) {
+      if (series.length > 0) merged.set(entityId, series);
+      continue;
+    }
+
+    const insertionIndex = series.findIndex((sample) => sample.at >= latest.at);
+    if (insertionIndex === -1) {
+      merged.set(entityId, [...series, latest]);
+      continue;
+    }
+    const afterLatest =
+      series[insertionIndex]?.at === latest.at ? insertionIndex + 1 : insertionIndex;
+    merged.set(entityId, [
+      ...series.slice(0, insertionIndex),
+      latest,
+      ...series.slice(afterLatest),
+    ]);
+  }
+
+  return merged;
 }
 
 /**
@@ -108,7 +157,7 @@ function collectSeries(
 
     const samples = group
       .map(toSample)
-      .filter((s): s is { value: number; at: number } => s !== null)
+      .filter((s): s is Sample => s !== null)
       .sort((a, b) => a.at - b.at);
 
     if (samples.length > 0) result.set(entityId, samples);

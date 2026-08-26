@@ -14,8 +14,9 @@
     "@greenhopper/domain": "workspace:*",
     "@greenhopper/hass": "workspace:*",
     "@greenhopper/storage": "workspace:*",
-    "agents": "0.0.97",
     "@modelcontextprotocol/server": "2.0.0",
+    "agents": "0.0.97",
+    "jose": "6.2.9",
     "zod": "4.4.3"
   },
   "devDependencies": {

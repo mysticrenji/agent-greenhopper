@@ -13,6 +13,7 @@ import { assess, DEFAULT_WATERING_POLICY, derive, isSensorFaultCode } from '@gre
 import type { HttpFetch, HttpResponse } from '@greenhopper/hass';
 import {
   buildObservation,
+  currentReadings,
   entityIdsOf,
   HassReader,
   miFloraEntities,
@@ -20,7 +21,12 @@ import {
 } from '@greenhopper/hass';
 import { AlertStateRepository, type D1Like, ReadingsRepository } from '@greenhopper/storage';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { z } from 'zod';
+
+const ASSESSMENT_HISTORY_MS = 48 * 60 * 60_000;
+const ASSESSMENT_HISTORY_HOURS = ASSESSMENT_HISTORY_MS / 60 / 60_000;
+const DLI_WINDOW_HOURS = 24;
 
 // ---------------------------------------------------------------------------
 // Environment — VPC Fetcher + D1
@@ -37,6 +43,8 @@ interface Env {
   CF_ACCESS_AUD?: string;
 }
 
+const ACCESS_JWKS = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
+
 // ---------------------------------------------------------------------------
 // Cloudflare Access JWT validation middleware
 // ---------------------------------------------------------------------------
@@ -47,15 +55,9 @@ interface Env {
  * Returns null if validation passes (allow the request through), or a 403
  * Response if validation fails.
  *
- * This performs lightweight validation: presence of the JWT, base64-decoding
- * the payload, and verifying the `aud` claim matches CF_ACCESS_AUD.
- *
- * NOTE: For production-grade validation, the JWT signature should be verified
- * against the JWKS endpoint at https://<team-domain>/cdn-cgi/access/certs.
- * Full JWKS verification requires a JWT library or manual RSA/ECDSA validation
- * which adds significant complexity. Cloudflare Access guarantees the header is
- * only present on requests that passed its authentication layer, so header
- * presence + aud matching provides a strong defence-in-depth layer.
+ * Signature, issuer, audience and expiry are verified against the Access JWKS.
+ * This remains necessary even behind Access because alternate routing mistakes
+ * must not let a caller forge a trusted-looking assertion header.
  */
 async function validateAccessJwt(request: Request, env: Env): Promise<Response | null> {
   const teamDomain = env.CF_ACCESS_TEAM_DOMAIN;
@@ -71,37 +73,28 @@ async function validateAccessJwt(request: Request, env: Env): Promise<Response |
     return new Response('Missing access token', { status: 403 });
   }
 
-  // Decode the JWT payload (second segment, base64url-encoded).
   try {
-    const parts = jwt.split('.');
-    if (parts.length !== 3) {
-      return new Response('Malformed token', { status: 403 });
-    }
-
-    // Base64url → standard base64 → decode
-    const payloadSegment = parts[1];
-    if (!payloadSegment) {
-      return new Response('Malformed token', { status: 403 });
-    }
-    const payloadB64 = payloadSegment.replace(/-/g, '+').replace(/_/g, '/');
-    const payloadJson = atob(payloadB64);
-    const payload = JSON.parse(payloadJson) as { aud?: unknown };
-
-    // Validate audience claim
-    const aud = payload.aud;
-    const audMatches = Array.isArray(aud)
-      ? (aud as unknown[]).includes(expectedAud)
-      : aud === expectedAud;
-
-    if (!audMatches) {
-      return new Response('Invalid audience', { status: 403 });
-    }
+    const issuer = normalizeTeamDomain(teamDomain);
+    await jwtVerify(jwt, jwksFor(issuer), { issuer, audience: expectedAud });
   } catch {
     return new Response('Token validation failed', { status: 403 });
   }
 
   // Validation passed — allow request through.
   return null;
+}
+
+function normalizeTeamDomain(teamDomain: string): string {
+  const withScheme = teamDomain.startsWith('https://') ? teamDomain : `https://${teamDomain}`;
+  return withScheme.replace(/\/$/, '');
+}
+
+function jwksFor(issuer: string): ReturnType<typeof createRemoteJWKSet> {
+  const cached = ACCESS_JWKS.get(issuer);
+  if (cached) return cached;
+  const jwks = createRemoteJWKSet(new URL(`${issuer}/cdn-cgi/access/certs`));
+  ACCESS_JWKS.set(issuer, jwks);
+  return jwks;
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +209,14 @@ function resolveContext(env: Env, plantId: string) {
   return { reader, profile, entities };
 }
 
+async function loadCurrentObservation(env: Env, plantId: string) {
+  const { reader, profile, entities } = resolveContext(env, plantId);
+  const now = Date.now();
+  const historyStart = now - ASSESSMENT_HISTORY_MS;
+  const history = await reader.historyWithLatest(entityIdsOf(entities), historyStart, now);
+  return { profile, observation: buildObservation({ profile, entities, history, now }) };
+}
+
 // ---------------------------------------------------------------------------
 // MCP Server factory — closes over env for tool handlers
 // ---------------------------------------------------------------------------
@@ -255,19 +256,20 @@ function createServerFactory(env: Env) {
         inputSchema: { plantId: z.string().describe('Plant identifier') },
       },
       async ({ plantId }) => {
-        const { reader, profile, entities } = resolveContext(env, plantId);
-
-        const now = Date.now();
-        const oneHourAgo = now - 60 * 60_000;
-        const ids = entityIdsOf(entities);
-        const history = await reader.history(ids, oneHourAgo, now);
-
-        const observation = buildObservation({ profile, entities, history, now });
+        const { profile, observation } = await loadCurrentObservation(env, plantId);
         const assessment = assess(observation);
 
         return textResult(
           JSON.stringify(
             {
+              plant: {
+                id: profile.id,
+                name: profile.name,
+                species: profile.species,
+                room: profile.room,
+              },
+              observedAt: observation.now,
+              current: currentReadings(observation),
               derived: assessment.derived,
               findings: assessment.findings,
               severity: assessment.severity,
@@ -317,17 +319,22 @@ function createServerFactory(env: Env) {
         inputSchema: { plantId: z.string().describe('Plant identifier') },
       },
       async ({ plantId }) => {
-        const { reader, profile, entities } = resolveContext(env, plantId);
-
-        const now = Date.now();
-        const twentyFourHoursAgo = now - 24 * 60 * 60_000;
-        const ids = entityIdsOf(entities);
-        const history = await reader.history(ids, twentyFourHoursAgo, now);
-
-        const observation = buildObservation({ profile, entities, history, now });
+        const { observation } = await loadCurrentObservation(env, plantId);
         const derived = derive(observation);
 
-        return textResult(JSON.stringify({ plantId, derived }, null, 2));
+        return textResult(
+          JSON.stringify(
+            {
+              plantId,
+              observedAt: observation.now,
+              historyWindowHours: ASSESSMENT_HISTORY_HOURS,
+              dliWindowHours: DLI_WINDOW_HOURS,
+              derived,
+            },
+            null,
+            2,
+          ),
+        );
       },
     );
 
@@ -341,14 +348,7 @@ function createServerFactory(env: Env) {
         inputSchema: { plantId: z.string().describe('Plant identifier') },
       },
       async ({ plantId }) => {
-        const { reader, profile, entities } = resolveContext(env, plantId);
-
-        const now = Date.now();
-        const oneHourAgo = now - 60 * 60_000;
-        const ids = entityIdsOf(entities);
-        const history = await reader.history(ids, oneHourAgo, now);
-
-        const observation = buildObservation({ profile, entities, history, now });
+        const { observation } = await loadCurrentObservation(env, plantId);
         const assessment = assess(observation);
 
         const sensorFindings = assessment.findings.filter((f) => isSensorFaultCode(f.code));
