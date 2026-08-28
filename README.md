@@ -17,62 +17,7 @@ Cloudflare Access: the MCP endpoint requires an Access JWT, and the agent's manu
 
 ## Architecture
 
-```mermaid
-flowchart TB
-    subgraph EDGE["🏠 Raspberry Pi · Kubernetes edge cluster"]
-        direction TB
-        MIFLORA["Mi Flora ×N<br/>moisture · soil temp · lux · EC · battery"]
-        ROOM["Room climate sensor × room<br/>air temperature · humidity"]
-        BT["Raspberry Pi Bluetooth adapter<br/>BlueZ · active + passive BLE"]
-        DBUS["System D-Bus<br/>/run/dbus mounted read-only"]
-
-        subgraph PODS["Kubernetes pods"]
-            HA["Home Assistant<br/>privileged · xiaomi_ble · :8123"]
-            TUNNEL["cloudflared<br/>QUIC · fixed replicas"]
-        end
-
-        PHONE["Phone<br/>Home Assistant push notification"]
-
-        MIFLORA -.->|BLE advertisements + battery reads| BT
-        ROOM -.->|BLE| BT
-        BT ==>|host D-Bus| DBUS
-        DBUS ==>|mounted socket| HA
-        HA -->|notify.mobile_app_*| PHONE
-        HA <-->|cluster DNS :8123| TUNNEL
-    end
-
-    TUNNEL <-->|outbound-only tunnel / UDP 7844| VPC
-
-    subgraph CF["☁️ Cloudflare"]
-        VPC["Workers VPC Service<br/>private, pinned HA host:port"]
-        subgraph WORKERS["Worker control plane"]
-            AGENT["Agent Worker<br/>hourly: assess → alert → notify"]
-            MCP["MCP Worker<br/>stateless · read-only · Access JWT"]
-            DOMAIN["Domain rules<br/>metrics · assessment · alert policy"]
-        end
-        D1["D1<br/>rollups · alert state · audit log"]
-        AI["AI Gateway → Workers AI<br/>only when rules escalate"]
-    end
-
-    CLIENTS["MCP clients<br/>Claude · ChatGPT · Kiro"]
-
-    AGENT --> DOMAIN
-    MCP --> DOMAIN
-    AGENT <--> D1
-    MCP --> D1
-    AGENT --> AI
-    AGENT <-->|read sensors / send notifications| VPC
-    CLIENTS -->|MCP over HTTPS| MCP
-
-    classDef sensor fill:#ECFDF5,stroke:#10B981,color:#064E3B,stroke-width:2px
-    classDef runtime fill:#FFF7ED,stroke:#F97316,color:#7C2D12,stroke-width:2px
-    classDef cloud fill:#EFF6FF,stroke:#3B82F6,color:#1E3A8A,stroke-width:2px
-    classDef client fill:#FAF5FF,stroke:#A855F7,color:#581C87,stroke-width:2px
-    class MIFLORA,ROOM,BT,DBUS sensor
-    class HA,TUNNEL,PHONE runtime
-    class VPC,AGENT,MCP,DOMAIN,D1,AI cloud
-    class CLIENTS client
-```
+![agent-greenhopper architecture](docs/architecture-diagram.png)
 
 > **Data path:** BLE never leaves your home network. Workers reach only the
 > Home Assistant API through the private VPC tunnel; the agent never talks to the

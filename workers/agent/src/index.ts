@@ -63,20 +63,6 @@ interface Env {
 // --- Hardcoded registry (same as workers/mcp, move to KV in prod) ---
 const PLANT_REGISTRY: PlantRegistry = [
   {
-    id: 'monstera',
-    name: 'Monstera Deliciosa',
-    species: 'Monstera deliciosa',
-    room: 'living-room',
-    targets: {
-      moisture: { min: 20, max: 60 },
-      soilTemp: { min: 15, max: 30 },
-      dli: { min: 4, max: 12 },
-      vpd: { min: 0.4, max: 1.6 },
-      conductivity: { min: 200, max: 1500 },
-    },
-    watering: DEFAULT_WATERING_POLICY,
-  },
-  {
     id: 'curry-leaves',
     name: 'Curry Leaves',
     species: 'Murraya koenigii',

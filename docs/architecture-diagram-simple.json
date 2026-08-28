@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "agent-greenhopper architecture",
+    "quality_profile": "showcase",
+    "locale": "en",
+    "legend": { "mode": "hidden" }
+  },
+  "components": [
+    {
+      "id": "sensors",
+      "type": "external",
+      "label": "Plant + room sensors",
+      "pos": [40, 210],
+      "size": [170, 64]
+    },
+    {
+      "id": "home_assistant",
+      "type": "backend",
+      "label": "Home Assistant",
+      "pos": [300, 210],
+      "size": [170, 64]
+    },
+    {
+      "id": "tunnel",
+      "type": "security",
+      "label": "cloudflared tunnel",
+      "pos": [560, 210],
+      "size": [170, 64]
+    },
+    {
+      "id": "vpc",
+      "type": "security",
+      "label": "Workers VPC",
+      "pos": [820, 210],
+      "size": [160, 64]
+    },
+    {
+      "id": "agent",
+      "type": "cloud",
+      "label": "Agent Worker",
+      "pos": [1080, 130],
+      "size": [170, 64]
+    },
+    { "id": "mcp", "type": "cloud", "label": "MCP Worker", "pos": [1080, 310], "size": [170, 64] },
+    { "id": "d1", "type": "database", "label": "D1", "pos": [1340, 220], "size": [150, 64] }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Home network",
+      "wraps": ["sensors", "home_assistant", "tunnel"],
+      "pad": 24
+    },
+    { "kind": "region", "label": "Cloudflare", "wraps": ["vpc", "agent", "mcp", "d1"], "pad": 24 }
+  ],
+  "connections": [
+    { "from": "sensors", "to": "home_assistant", "label": "BLE" },
+    { "from": "home_assistant", "to": "tunnel", "label": "private API" },
+    { "from": "tunnel", "to": "vpc", "label": "private tunnel", "variant": "security" },
+    { "from": "vpc", "to": "agent" },
+    { "from": "vpc", "to": "mcp" },
+    { "from": "agent", "to": "d1", "label": "state + readings", "route": "orthogonal-h" },
+    { "from": "mcp", "to": "d1", "label": "read history", "route": "orthogonal-h" }
+  ]
+}
