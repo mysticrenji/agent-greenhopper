@@ -8,7 +8,7 @@ plant health, and sends you a notification. A remote MCP server exposes the same
 read capabilities to external clients such as Claude, ChatGPT, or Kiro.
 
 **Alert-only — it does not water anything.** There is no pump and no write path to
-Home Assistant. See [ADR 0003](docs/adr/0003-aleIsrt-only-no-actuation.md).
+Home Assistant. See [ADR 0003](docs/adr/0003-alert-only-no-actuation.md).
 
 Home Assistant stays off the public internet — Workers reach it privately through
 Workers VPC over a Cloudflare Tunnel. Both Worker HTTP surfaces are gated by
@@ -30,10 +30,11 @@ Cloudflare Access: the MCP endpoint requires an Access JWT, and the agent's manu
 | `packages/domain` | Complete — `alerts.ts` and `guardrails.ts` at 100% |
 | `packages/hass` | Complete — read-only, 98.9% statements |
 | `packages/storage` | Complete — tested against real SQLite, 100% statements |
+| `packages/config` | Complete — plant registry generated from `config/plants.yaml`, validated by zod on load |
 | `workers/mcp` | Complete — stateless MCP server, 6 read-only tools, gated by Cloudflare Access |
 | `workers/agent` | Complete — hourly cron, D1 run lock, per-plant failure isolation, assess → alert → notify pipeline |
 
-222 tests across 17 files (`pnpm test`). Run `pnpm verify` for lint + typecheck +
+242 tests across 18 files (`pnpm test`). Run `pnpm verify` for lint + typecheck +
 tests together.
 
 ### Hardening applied
@@ -87,7 +88,7 @@ corepack enable pnpm
 # Install all dependencies
 pnpm install
 
-# Run the full verification suite: lint + typecheck + 222 tests
+# Run the full verification suite: lint + typecheck + 242 tests
 pnpm verify
 ```
 
@@ -328,40 +329,53 @@ double-processing plants and double-notifying.
 
 ### Step 11: Configure your plant registry
 
-Currently the plant registry is hardcoded in both Workers. To add your actual
-plants, edit the `PLANT_REGISTRY` and `ENTITY_REGISTRY` arrays in:
+[`config/plants.yaml`](config/plants.yaml) is the single source of truth for every
+monitored plant, its targets and its Home Assistant entity IDs. Both Workers read
+it through `@greenhopper/config`; there is no per-Worker registry to keep in sync.
 
-- `workers/mcp/src/index.ts`
-- `workers/agent/src/index.ts`
+Add an entry per plant:
 
-Example for adding a fern:
-
-```typescript
-// In PLANT_REGISTRY:
-{
-  id: 'fern',
-  name: 'Boston Fern',
-  species: 'Nephrolepis exaltata',
-  room: 'bathroom',
-  targets: {
-    moisture: { min: 40, max: 70 },
-    soilTemp: { min: 15, max: 25 },
-    dli: { min: 1, max: 6 },
-    vpd: { min: 0.3, max: 1.0 },
-    conductivity: { min: 200, max: 1000 },
-  },
-  watering: DEFAULT_WATERING_POLICY,
-},
-
-// In ENTITY_REGISTRY:
-miFloraEntities({
-  plantId: 'fern',
-  deviceSlug: 'boston_fern_flower_care',  // from HA device name
-  airSensorSlug: 'bathroom_climate',      // your room sensor
-}),
+```yaml
+plants:
+  - id: fern
+    name: Boston Fern
+    species: Nephrolepis exaltata
+    room: bathroom
+    targets:
+      moisture: { min: 40, max: 70 }
+      soilTemp: { min: 15, max: 25 }
+      dli: { min: 1, max: 6 }
+      vpd: { min: 0.3, max: 1.0 }
+      conductivity: { min: 200, max: 1000 }
+    watering:
+      maxSeconds: 20
+      minIntervalHours: 48
+      moistureCeiling: 35
+      maxRunsPerDay: 2
+    entities:
+      moisture: sensor.ble_moisture_aabbccddeeff
+      soilTemp: sensor.ble_temperature_aabbccddeeff
+      lux: sensor.ble_illuminance_aabbccddeeff
+      conductivity: sensor.ble_conductivity_aabbccddeeff
+      airTemp: sensor.bathroom_temperature   # your room sensor
+      humidity: sensor.bathroom_humidity     # required for VPD
 ```
 
-After editing, redeploy both Workers:
+Regenerate the typed module the Workers import, then commit both files:
+
+```bash
+# Writes packages/config/src/plants.generated.ts from config/plants.yaml
+pnpm config:generate
+
+# Fails if the generated module is stale — useful in CI or a pre-push check
+node scripts/generate-plant-config.mjs --check
+```
+
+The generator is validated on load: zod rejects an unknown shape, a plant with no
+entity mapping, or an entity mapping with no plant. A typo fails at startup rather
+than producing a silently unmonitored plant.
+
+After regenerating, redeploy both Workers:
 
 ```bash
 cd workers/mcp && wrangler deploy
@@ -437,6 +451,8 @@ headers from step 10):
 | `/run` returns `403` | Wrong or missing `CF-Access-Client-Id`/`-Secret` headers | Re-check the service token's Client ID/Secret |
 | MCP client gets `403` | Access JWT missing, expired, or `CF_ACCESS_AUD`/`CF_ACCESS_TEAM_DOMAIN` unset | Re-authenticate via `mcp-remote`; verify secrets match the Access Application |
 | Agent logs show `Run already in progress, skipping.` | A previous run is still holding the D1 lease (or crashed without releasing it) | Wait for the 5-minute TTL to expire, or clear it: `wrangler d1 execute greenhopper --remote --command "DELETE FROM run_lock"` |
+| A plant in `config/plants.yaml` is never monitored | `plants.generated.ts` was not regenerated after editing the YAML | Run `pnpm config:generate` and redeploy both Workers |
+| `Cannot find package 'yaml'` when running the generator | Dependencies not installed at the workspace root | `pnpm install` (the generator uses the root `yaml` devDependency) |
 | `pnpm verify` fails on a fresh clone | Wrong Node version | Check `node --version` is >= 22 |
 
 ---

@@ -49,6 +49,8 @@ packages/domain/     Pure logic: signals, metrics, assessment rules, alert polic
                      Depends on nothing but zod. Fully unit tested.
 packages/hass/       Home Assistant adapter. READ-ONLY except notification send.
 packages/storage/    D1 schema, migrations, repositories. Tested against real SQLite.
+packages/config/     Plant registry + entity mapping, generated from config/plants.yaml
+                     by scripts/generate-plant-config.mjs and zod-validated on load.
 workers/mcp/         Remote MCP server (createMcpHandler, SDK v2, stateless).
 workers/agent/       Scheduled cron Worker: assess → alert → notify pipeline.
 deploy/kubernetes/   cloudflared Deployment + NetworkPolicy for Workers VPC.
@@ -167,6 +169,7 @@ pnpm typecheck        # tsc --build across project references
 pnpm test             # Vitest, all packages
 pnpm test:watch
 pnpm test:coverage    # enforces thresholds on domain and graph
+pnpm config:generate  # regenerate packages/config from config/plants.yaml after editing it
 ```
 
 `pnpm install` configures Git to use the tracked `.githooks/` directory. Its
@@ -188,6 +191,7 @@ in a dedicated commit.
 | Vitest | 4.1.10 | |
 | zod | 4.4.3 | only runtime dependency of the domain layer |
 | jose | 6.2.9 | MCP Worker validation of Cloudflare Access JWT signatures and claims |
+| yaml | 2.9.x | root devDependency; only used by `scripts/generate-plant-config.mjs`, never bundled |
 
 ## 7. Coding standards
 
